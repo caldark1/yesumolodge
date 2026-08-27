@@ -13,13 +13,45 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Reference is required" }, { status: 400 });
     }
 
+    // Resolve input reference: it may be a Paystack reference or a booking code.
+    console.log(`Received verify request for reference=${reference}`);
+
+    // Try to find a payment that matches this reference exactly
+    const [exactPayment] = await db.select().from(payments).where(eq(payments.reference, reference)).limit(1);
+    let refToVerify: string | null = null;
+    if (exactPayment) {
+      refToVerify = exactPayment.reference;
+      console.log(`Found exact payment record id=${exactPayment.id} bookingId=${exactPayment.bookingId}`);
+    } else {
+      // Try to resolve as booking code -> lookup booking.paystackReference or payment by bookingId
+      const [bookingByCode] = await db.select().from(bookings).where(eq(bookings.bookingId, reference)).limit(1);
+      if (bookingByCode) {
+        console.log(`Found booking by code=${bookingByCode.bookingId} id=${bookingByCode.id} paystackReference=${bookingByCode.paystackReference}`);
+        if (bookingByCode.paystackReference) {
+          refToVerify = bookingByCode.paystackReference;
+        } else {
+          const [paymentByBooking] = await db.select().from(payments).where(eq(payments.bookingId, bookingByCode.id)).limit(1);
+          if (paymentByBooking) {
+            refToVerify = paymentByBooking.reference;
+            console.log(`Found payment by booking id=${bookingByCode.id} reference=${refToVerify}`);
+          }
+        }
+      }
+    }
+
+    // Fallback: use the provided reference
+    if (!refToVerify) {
+      refToVerify = reference;
+      console.log(`No mapped payment found; will verify provided reference=${reference}`);
+    }
+
     // Verify with Paystack
-    console.log(`Verifying payment reference=${reference}`);
-    const result = await verifyTransaction(reference);
-    console.log(`Paystack verify response for ${reference}: status=${result.status} data.status=${result?.data?.status}`);
+    console.log(`Verifying with Paystack reference=${refToVerify}`);
+    const result = await verifyTransaction(refToVerify);
+    console.log(`Paystack verify response for ${refToVerify}: status=${result.status} data.status=${result?.data?.status}`);
 
     if (!result.status) {
-      console.error(`Paystack verification failed for ${reference}`);
+      console.error(`Paystack verification failed for ${refToVerify}`);
       return NextResponse.json({ error: "Verification failed", result }, { status: 400 });
     }
 
