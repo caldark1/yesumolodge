@@ -8,12 +8,12 @@ import Footer from "@/components/Footer";
 
 export default function ConfirmationContent() {
   const searchParams = useSearchParams();
-  const reference = searchParams.get("ref");
+  const referenceParam = searchParams.get("reference") || searchParams.get("ref") || searchParams.get("reference_id");
   const [status, setStatus] = useState<"checking" | "success" | "pending" | "failed">("checking");
   const [details, setDetails] = useState<Record<string, unknown>>({});
 
   useEffect(() => {
-    if (!reference) {
+    if (!referenceParam) {
       setStatus("failed");
       return;
     }
@@ -22,21 +22,23 @@ export default function ConfirmationContent() {
 
   const checkPayment = async () => {
     try {
-      if (reference && !reference.startsWith("YML-")) {
-        const res = await fetch(`/api/payments/verify?reference=${reference}`);
-        const data = await res.json();
-        if (data.status === "success") {
-          setStatus("success");
-          setDetails(data);
-          return;
-        }
+      const ref = referenceParam;
+
+      // Always attempt server-side verification using the provided reference param.
+      // The verify endpoint will resolve booking codes to paystack references when needed.
+      const res = await fetch(`/api/payments/verify?reference=${encodeURIComponent(ref)}`);
+      const data = await res.json();
+      if (res.ok && data.status === "success") {
+        setStatus("success");
+        setDetails(data);
+        return;
       }
 
-      const bookingRef = reference || "";
+      // If verify didn't return success, try to look up booking by code and its stored paystackReference
       const bookingsRes = await fetch("/api/bookings");
       const bookingsData = await bookingsRes.json();
       const booking = bookingsData.bookings?.find(
-        (b: { booking: { bookingId: string; paymentStatus: string } }) => b.booking.bookingId === bookingRef
+        (b: { booking: { bookingId: string; paymentStatus: string; paystackReference?: string } }) => b.booking.bookingId === ref
       );
 
       if (booking?.booking.paymentStatus === "paid") {
@@ -45,12 +47,11 @@ export default function ConfirmationContent() {
         return;
       }
 
-      // If payment not marked paid, try verifying using stored paystack reference
       const paystackRef = booking?.booking.paystackReference;
       if (paystackRef) {
         const verifyRes = await fetch(`/api/payments/verify?reference=${encodeURIComponent(paystackRef)}`);
         const verifyData = await verifyRes.json();
-        if (verifyData.status === "success") {
+        if (verifyRes.ok && verifyData.status === "success") {
           setStatus("success");
           setDetails(verifyData);
           return;
@@ -58,7 +59,8 @@ export default function ConfirmationContent() {
       }
 
       setStatus("pending");
-    } catch {
+    } catch (err) {
+      console.error("Confirmation checkPayment error:", err);
       setStatus("pending");
     }
   };

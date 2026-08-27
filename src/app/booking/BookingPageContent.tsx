@@ -48,7 +48,7 @@ export default function BookingPageContent() {
   const [guestEmail, setGuestEmail] = useState("");
   const [guestPhone, setGuestPhone] = useState("");
 
-  const [bookingResult, setBookingResult] = useState<{ bookingId: string; id?: number; amount: number; nights: number; roomNumber: number; category: string } | null>(null);
+  const [bookingResult, setBookingResult] = useState<{ bookingId: string; id?: number; paystackReference?: string; accessCode?: string; amount: number; nights: number; roomNumber: number; category: string } | null>(null);
 
   useEffect(() => {
     const cat = searchParams.get("category");
@@ -182,11 +182,14 @@ export default function BookingPageContent() {
         return;
       }
 
+      // store reference/access code so frontend can call verify later
+      setBookingResult((prev) => (prev ? { ...prev, paystackReference: data.reference, accessCode: data.access_code || data.accessCode } : prev));
+
       const win = window as unknown as Record<string, unknown>;
       if (typeof window !== "undefined" && win.PaystackPop) {
         const Popup = win.PaystackPop as new () => { resumeTransaction: (code: string) => void };
         const popup = new Popup();
-        popup.resumeTransaction(data.accessCode);
+        popup.resumeTransaction(data.access_code || data.accessCode);
       } else if (data.authorizationUrl) {
         window.location.href = data.authorizationUrl;
       }
@@ -383,7 +386,7 @@ export default function BookingPageContent() {
               </button>
               <p className="text-center text-xs text-slate mt-4">Secure payment powered by Paystack.</p>
               <div className="mt-6 text-center">
-                <button onClick={() => router.push(`/booking/confirmation?ref=${bookingResult.bookingId}`)} className="text-sm text-primary hover:text-primary-dark">
+                <button onClick={() => router.push(`/booking/confirmation?reference=${bookingResult?.paystackReference ?? bookingResult?.bookingId}`)} className="text-sm text-primary hover:text-primary-dark">
                   I&apos;ve completed payment — Check status
                 </button>
               </div>
