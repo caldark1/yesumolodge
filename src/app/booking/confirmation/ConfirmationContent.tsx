@@ -42,9 +42,22 @@ export default function ConfirmationContent() {
       if (booking?.booking.paymentStatus === "paid") {
         setStatus("success");
         setDetails(booking.booking);
-      } else {
-        setStatus("pending");
+        return;
       }
+
+      // If payment not marked paid, try verifying using stored paystack reference
+      const paystackRef = booking?.booking.paystackReference;
+      if (paystackRef) {
+        const verifyRes = await fetch(`/api/payments/verify?reference=${encodeURIComponent(paystackRef)}`);
+        const verifyData = await verifyRes.json();
+        if (verifyData.status === "success") {
+          setStatus("success");
+          setDetails(verifyData);
+          return;
+        }
+      }
+
+      setStatus("pending");
     } catch {
       setStatus("pending");
     }

@@ -85,6 +85,14 @@ export default function BookingPageContent() {
     if (checkIn && checkOut) fetchCategories();
   }, [checkIn, checkOut]);
 
+  const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const isValidPhone = (phone: string) => {
+    if (!phone) return true; // optional
+    const digits = phone.replace(/\s+/g, "");
+    return /^\+?[0-9]{7,15}$/.test(digits);
+  };
+  const isValidName = (name: string) => name.trim().length > 1 && !/\d/.test(name);
+
   const nights =
     checkIn && checkOut
       ? Math.ceil((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / (1000 * 60 * 60 * 24))
@@ -97,6 +105,20 @@ export default function BookingPageContent() {
     if (!selectedCategory || !checkIn || !checkOut) return;
     if (!guestName || !guestEmail) {
       setError("Guest name and email are required");
+      return;
+    }
+
+    // Client-side validation
+    if (!isValidName(guestName)) {
+      setError("Please enter a valid name (no numbers)");
+      return;
+    }
+    if (!isValidEmail(guestEmail)) {
+      setError("Please enter a valid email address");
+      return;
+    }
+    if (!isValidPhone(guestPhone)) {
+      setError("Please enter a valid phone number (digits, optional leading +)");
       return;
     }
 

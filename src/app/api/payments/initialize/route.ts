@@ -33,7 +33,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Initialize Paystack transaction
-    const reference = `YML-${booking.bookingId}-${Date.now()}`;
+    // Avoid double-prefixing if booking.bookingId already contains the YML- prefix
+    const reference = (booking.bookingId?.startsWith?.("YML-") ? `${booking.bookingId}` : `YML-${booking.bookingId}`) + `-${Date.now()}`;
     const result = await initializeTransaction(
       booking.guestEmail,
       booking.amount,
