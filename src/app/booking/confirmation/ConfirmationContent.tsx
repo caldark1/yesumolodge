@@ -22,7 +22,8 @@ export default function ConfirmationContent() {
 
   const checkPayment = async () => {
     try {
-      const ref = referenceParam;
+      if (!referenceParam) return;
+      const ref = referenceParam as string;
 
       // Always attempt server-side verification using the provided reference param.
       // The verify endpoint will resolve booking codes to paystack references when needed.
