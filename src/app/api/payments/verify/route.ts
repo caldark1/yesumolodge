@@ -46,12 +46,14 @@ export async function GET(request: NextRequest) {
     }
 
     // Verify with Paystack
-    console.log(`Verifying with Paystack reference=${refToVerify}`);
+    console.log("Verifying with Paystack reference=", refToVerify);
     const result = await verifyTransaction(refToVerify);
-    console.log(`Paystack verify response for ${refToVerify}: status=${result.status} data.status=${result?.data?.status}`);
+    const resultStatus = result && typeof result === "object" && "status" in result ? (result as any).status : null;
+    const dataStatus = result && (result as any).data ? (result as any).data.status : null;
+    console.log("Paystack verify response for", refToVerify, "status=", resultStatus, "data.status=", dataStatus);
 
-    if (!result.status) {
-      console.error(`Paystack verification failed for ${refToVerify}`);
+    if (!result || !resultStatus) {
+      console.error("Paystack verification failed for", refToVerify);
       return NextResponse.json({ error: "Verification failed", result }, { status: 400 });
     }
 
@@ -61,9 +63,9 @@ export async function GET(request: NextRequest) {
       const [payment] = await db
         .select()
         .from(payments)
-        .where(eq(payments.reference, reference))
+        .where(eq(payments.reference, refToVerify))
         .limit(1);
-      console.log(`Lookup payment by reference=${reference}: found=${!!payment} id=${payment?.id} bookingId=${payment?.bookingId}`);
+      console.log("Lookup payment by reference=", refToVerify, "found=", !!payment, "id=", payment?.id, "bookingId=", payment?.bookingId);
 
       if (payment && payment.status !== "success") {
         // Update payment status
@@ -73,8 +75,8 @@ export async function GET(request: NextRequest) {
             status: "success",
             paystackResponse: result as unknown as Record<string, unknown>,
           })
-          .where(eq(payments.reference, reference));
-        console.log(`Updated payment record id=${payment.id} to success for reference=${reference}`);
+          .where(eq(payments.reference, refToVerify));
+        console.log("Updated payment record id=", payment.id, "to success for reference=", refToVerify);
 
         // Update booking payment status and confirm booking
         const [booking] = await db
@@ -82,7 +84,7 @@ export async function GET(request: NextRequest) {
           .from(bookings)
           .where(eq(bookings.id, payment.bookingId))
           .limit(1);
-        console.log(`Lookup booking by id=${payment.bookingId}: found=${!!booking} bookingId=${booking?.bookingId}`);
+        console.log("Lookup booking by id=", payment.bookingId, "found=", !!booking, "bookingId=", booking?.bookingId);
 
         if (booking) {
           await db
