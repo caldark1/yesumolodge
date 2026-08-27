@@ -18,7 +18,7 @@ export default function ConfirmationContent() {
       return;
     }
     checkPayment();
-  }, [reference]);
+  }, [referenceParam]);
 
   const checkPayment = async () => {
     try {
@@ -89,7 +89,7 @@ export default function ConfirmationContent() {
                 <p className="text-slate text-sm mb-4">Your booking has been confirmed.</p>
                 <div className="bg-cream rounded-lg p-4 mb-6">
                   <p className="text-xs text-slate">Booking Reference</p>
-                  <p className="text-lg font-heading text-primary">{reference}</p>
+                  <p className="text-lg font-heading text-primary">{referenceParam}</p>
                 </div>
               </>
             )}
@@ -104,7 +104,7 @@ export default function ConfirmationContent() {
                 <p className="text-slate text-sm mb-4">Your booking has been created but payment is still pending.</p>
                 <div className="bg-cream rounded-lg p-4 mb-6">
                   <p className="text-xs text-slate">Booking Reference</p>
-                  <p className="text-lg font-heading text-primary">{reference}</p>
+                  <p className="text-lg font-heading text-primary">{referenceParam}</p>
                 </div>
                 <button onClick={checkPayment} className="px-6 py-2 bg-primary text-white rounded-lg text-sm hover:bg-primary-dark transition-colors">Check Again</button>
               </>
