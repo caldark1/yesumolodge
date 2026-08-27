@@ -48,7 +48,7 @@ export default function BookingPageContent() {
   const [guestEmail, setGuestEmail] = useState("");
   const [guestPhone, setGuestPhone] = useState("");
 
-  const [bookingResult, setBookingResult] = useState<{ bookingId: string; amount: number; nights: number; roomNumber: number; category: string } | null>(null);
+  const [bookingResult, setBookingResult] = useState<{ bookingId: string; id?: number; amount: number; nights: number; roomNumber: number; category: string } | null>(null);
 
   useEffect(() => {
     const cat = searchParams.get("category");
@@ -128,6 +128,7 @@ export default function BookingPageContent() {
 
       setBookingResult({
         bookingId: data.booking.bookingId,
+        id: data.booking.id,
         amount: data.amount,
         nights: data.nights,
         roomNumber: data.roomNumber,
@@ -150,7 +151,7 @@ export default function BookingPageContent() {
       const res = await fetch("/api/payments/initialize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bookingId: bookingResult.bookingId }),
+        body: JSON.stringify({ bookingId: bookingResult.id ?? bookingResult.bookingId }),
       });
 
       const data = await res.json();
