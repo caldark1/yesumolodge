@@ -35,6 +35,7 @@ export async function POST(request: NextRequest) {
     // Initialize Paystack transaction
     // Avoid double-prefixing if booking.bookingId already contains the YML- prefix
     const reference = (booking.bookingId?.startsWith?.("YML-") ? `${booking.bookingId}` : `YML-${booking.bookingId}`) + `-${Date.now()}`;
+    console.log(`Initializing payment for booking.id=${booking.id} booking.bookingId=${booking.bookingId} amount=${booking.amount}`);
     const result = await initializeTransaction(
       booking.guestEmail,
       booking.amount,
@@ -51,13 +52,14 @@ export async function POST(request: NextRequest) {
     );
 
     // Store payment record
-    await db.insert(payments).values({
+    const [insertedPayment] = await db.insert(payments).values({
       bookingId: booking.id,
       reference: result.data.reference,
       amount: booking.amount,
       status: "pending",
       paystackResponse: result as unknown as Record<string, unknown>,
-    });
+    }).returning();
+    console.log(`Stored payment record id=${insertedPayment?.id} reference=${insertedPayment?.reference}`);
 
     // Update booking with Paystack reference
     await db
@@ -68,6 +70,7 @@ export async function POST(request: NextRequest) {
         updatedAt: new Date(),
       })
       .where(eq(bookings.id, bookingId));
+    console.log(`Updated booking id=${bookingId} with paystackReference=${result.data.reference}`);
 
     return NextResponse.json({
       accessCode: result.data.access_code,

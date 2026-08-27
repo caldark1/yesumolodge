@@ -14,9 +14,12 @@ export async function GET(request: NextRequest) {
     }
 
     // Verify with Paystack
+    console.log(`Verifying payment reference=${reference}`);
     const result = await verifyTransaction(reference);
+    console.log(`Paystack verify response for ${reference}: status=${result.status} data.status=${result?.data?.status}`);
 
     if (!result.status) {
+      console.error(`Paystack verification failed for ${reference}`);
       return NextResponse.json({ error: "Verification failed", result }, { status: 400 });
     }
 
@@ -28,6 +31,7 @@ export async function GET(request: NextRequest) {
         .from(payments)
         .where(eq(payments.reference, reference))
         .limit(1);
+      console.log(`Lookup payment by reference=${reference}: found=${!!payment} id=${payment?.id} bookingId=${payment?.bookingId}`);
 
       if (payment && payment.status !== "success") {
         // Update payment status
@@ -38,6 +42,7 @@ export async function GET(request: NextRequest) {
             paystackResponse: result as unknown as Record<string, unknown>,
           })
           .where(eq(payments.reference, reference));
+        console.log(`Updated payment record id=${payment.id} to success for reference=${reference}`);
 
         // Update booking payment status and confirm booking
         const [booking] = await db
@@ -45,6 +50,7 @@ export async function GET(request: NextRequest) {
           .from(bookings)
           .where(eq(bookings.id, payment.bookingId))
           .limit(1);
+        console.log(`Lookup booking by id=${payment.bookingId}: found=${!!booking} bookingId=${booking?.bookingId}`);
 
         if (booking) {
           await db
@@ -55,12 +61,14 @@ export async function GET(request: NextRequest) {
               updatedAt: new Date(),
             })
             .where(eq(bookings.id, booking.id));
+          console.log(`Updated booking id=${booking.id} paymentStatus=paid status=confirmed`);
 
           // Mark room as booked
           await db
             .update(rooms)
             .set({ status: "booked", updatedAt: new Date() })
             .where(eq(rooms.id, booking.roomId));
+          console.log(`Marked room id=${booking.roomId} as booked`);
         }
       }
     }
@@ -85,6 +93,7 @@ export async function POST(request: NextRequest) {
     // Verify webhook signature (in production, you should verify the signature)
     const event = body.event;
     const data = body.data;
+    console.log(`Received Paystack webhook event=${event} reference=${data?.reference}`);
 
     if (event === "charge.success" && data.status === "success") {
       const reference = data.reference;
@@ -94,6 +103,7 @@ export async function POST(request: NextRequest) {
         .from(payments)
         .where(eq(payments.reference, reference))
         .limit(1);
+      console.log(`Webhook lookup payment reference=${reference}: found=${!!payment} id=${payment?.id}`);
 
       if (payment && payment.status !== "success") {
         await db
@@ -103,12 +113,14 @@ export async function POST(request: NextRequest) {
             paystackResponse: data as Record<string, unknown>,
           })
           .where(eq(payments.reference, reference));
+        console.log(`Webhook updated payment id=${payment.id} to success`);
 
         const [booking] = await db
           .select()
           .from(bookings)
           .where(eq(bookings.id, payment.bookingId))
           .limit(1);
+        console.log(`Webhook lookup booking id=${payment.bookingId}: found=${!!booking} bookingId=${booking?.bookingId}`);
 
         if (booking) {
           await db
@@ -119,12 +131,16 @@ export async function POST(request: NextRequest) {
               updatedAt: new Date(),
             })
             .where(eq(bookings.id, booking.id));
+          console.log(`Webhook updated booking id=${booking.id} to paid/confirmed`);
 
           await db
             .update(rooms)
             .set({ status: "booked", updatedAt: new Date() })
             .where(eq(rooms.id, booking.roomId));
+          console.log(`Webhook marked room id=${booking.roomId} as booked`);
         }
+      } else {
+        if (!payment) console.warn(`Webhook: no payment record found for reference=${reference}`);
       }
     }
 
