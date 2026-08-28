@@ -54,7 +54,7 @@ export async function initializeTransaction(
       metadata: metadata || {},
       // Include the reference in the callback URL so Paystack redirects back
       // with the canonical transaction reference and the app can verify it automatically.
-      callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/booking/confirmation?reference=${encodeURIComponent(reference)}`,
+      callback_url: `${process.env.NEXT_APP_URL}/booking/confirmation?reference=${encodeURIComponent(reference)}`,
     }),
   });
 
