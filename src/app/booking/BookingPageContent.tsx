@@ -385,11 +385,11 @@ export default function BookingPageContent() {
                 {loading ? "Processing..." : `Pay GH₵ ${bookingResult.amount} with Paystack`}
               </button>
               <p className="text-center text-xs text-slate mt-4">Secure payment powered by Paystack.</p>
-              <div className="mt-6 text-center">
+              {/* <div className="mt-6 text-center">
                 <button onClick={() => router.push(`/booking/confirmation?reference=${bookingResult?.paystackReference ?? bookingResult?.bookingId}`)} className="text-sm text-primary hover:text-primary-dark">
                   I&apos;ve completed payment — Check status
                 </button>
-              </div>
+              </div> */}
             </div>
           )}
         </div>
