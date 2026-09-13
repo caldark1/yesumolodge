@@ -7,10 +7,21 @@ import { initializeTransaction } from "@/lib/paystack";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { bookingId, bookingIds, bookingCode } = body;
+    const { bookingId, bookingIds, bookingCode, extensionId } = body;
 
     // Resolve bookings to charge
     let bookingsToCharge: any[] = [];
+
+    // If charging for an extension, resolve extension and charge its amount
+    if (extensionId) {
+      const [ext] = await db.select().from((await import("@/db/schema")).extensions).where((await import("drizzle-orm")).eq((await import("@/db/schema")).extensions.id, parseInt(extensionId))).limit(1);
+      if (!ext) return NextResponse.json({ error: `Extension ${extensionId} not found` }, { status: 404 });
+      if (ext.paymentStatus === "paid") return NextResponse.json({ error: `Extension ${extensionId} has already been paid` }, { status: 400 });
+      // Load the original booking to attach reference
+      const [b] = await db.select().from(bookings).where(eq(bookings.id, ext.bookingId)).limit(1);
+      if (!b) return NextResponse.json({ error: `Associated booking ${ext.bookingId} not found` }, { status: 404 });
+      bookingsToCharge = [b];
+    }
 
     if (bookingCode) {
       // Load bookings by shared booking code: check groupBookingId first, then bookingId
@@ -45,7 +56,14 @@ export async function POST(request: NextRequest) {
       if (b.status === "cancelled") return NextResponse.json({ error: `Booking ${b.id} has been cancelled` }, { status: 400 });
     }
 
-    const totalAmount = bookingsToCharge.reduce((sum, b) => sum + b.amount, 0);
+    let totalAmount = bookingsToCharge.reduce((sum, b) => sum + b.amount, 0);
+    let extRecord: any = null;
+    if (extensionId) {
+      const [ext] = await db.select().from((await import("@/db/schema")).extensions).where((await import("drizzle-orm")).eq((await import("@/db/schema")).extensions.id, parseInt(extensionId))).limit(1);
+      if (!ext) return NextResponse.json({ error: `Extension ${extensionId} not found` }, { status: 404 });
+      extRecord = ext;
+      totalAmount = ext.amount;
+    }
 
     // Initialize Paystack transaction for total amount
     const primary = bookingsToCharge[0];
@@ -61,6 +79,7 @@ export async function POST(request: NextRequest) {
         guest_name: primary.guestName,
         custom_fields: [
           { display_name: "Booking IDs", variable_name: "booking_ids", value: JSON.stringify(bookingsToCharge.map((b) => b.id)) },
+          ...(extensionId ? [{ display_name: "Extension ID", variable_name: "extension_id", value: String(extensionId) }] : []),
           { display_name: "Guest Name", variable_name: "guest_name", value: primary.guestName },
         ],
       }
@@ -71,6 +90,7 @@ export async function POST(request: NextRequest) {
     try {
       [insertedPayment] = await db.insert(payments).values({
         bookingId: primary.id,
+        extensionId: extensionId ? parseInt(extensionId) : undefined,
         bookingIds: JSON.stringify(bookingsToCharge.map((b) => b.id)),
         reference: result.data.reference,
         amount: totalAmount,
@@ -82,6 +102,7 @@ export async function POST(request: NextRequest) {
       console.warn("Could not store bookingIds in payments table, falling back to legacy insert", e);
       [insertedPayment] = await db.insert(payments).values({
         bookingId: primary.id,
+        extensionId: extensionId ? parseInt(extensionId) : undefined,
         reference: result.data.reference,
         amount: totalAmount,
         status: "pending",

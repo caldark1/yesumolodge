@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { format } from "date-fns";
+import ExtensionsQuickView from "../ExtensionsQuickView";
 
 interface Room {
   id: number;
@@ -37,7 +38,7 @@ export default function ReceptionPage() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [bookings, setBookings] = useState<BookingWithRoom[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"available" | "booked" | "arrivals" | "departures" | "walkin">("available");
+  const [tab, setTab] = useState<"available" | "booked" | "arrivals" | "departures" | "walkin" | "extensions">("available");
 
   // Walk-in booking form
   const [showWalkIn, setShowWalkIn] = useState(false);
@@ -46,6 +47,11 @@ export default function ReceptionPage() {
   const [walkInLoading, setWalkInLoading] = useState(false);
   const [walkInError, setWalkInError] = useState("");
   const [walkInSuccess, setWalkInSuccess] = useState("");
+  const [extLoading, setExtLoading] = useState(false);
+  const [extError, setExtError] = useState<string | null>(null);
+  const [extSuccess, setExtSuccess] = useState<string | null>(null);
+  const [extEditingId, setExtEditingId] = useState<number | null>(null);
+  const [extNewCheckOut, setExtNewCheckOut] = useState<string>("");
 
   const fetchData = async () => {
     setLoading(true);
@@ -196,6 +202,7 @@ export default function ReceptionPage() {
     { key: "arrivals" as const, label: "Arrivals", count: arrivals.length },
     { key: "departures" as const, label: "Departures", count: departures.length },
     { key: "walkin" as const, label: "Walk-in Booking", count: 0 },
+    { key: "extensions" as const, label: "Extensions", count: 0 },
   ];
 
   const selectedRoomForWalkIn = rooms.find((r) => r.id === parseInt(walkInForm.roomId));
@@ -373,6 +380,14 @@ export default function ReceptionPage() {
         </div>
       )}
 
+      {/* Extensions quick view */}
+      {tab === "extensions" && (
+        <div className="bg-white rounded-xl border border-cream-dark p-6 animate-fade-in">
+          <h3 className="font-heading text-charcoal text-lg mb-4">Recent Extensions</h3>
+          <ExtensionsQuickView />
+        </div>
+      )}
+
       {/* Available Rooms */}
       {tab === "available" && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -437,6 +452,38 @@ export default function ReceptionPage() {
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${booking.source === "walk_in" ? "bg-accent/10 text-accent" : "bg-primary/10 text-primary"}`}>{booking.source === "walk_in" ? "Walk-in" : "Online"}</span>
                   <p className="text-sm font-medium">GH₵ {booking.amount}</p>
                 </div>
+                <div className="flex items-center gap-2">
+                  {extEditingId === booking.id ? (
+                    <div className="flex items-center gap-2">
+                      <input type="date" value={extNewCheckOut} onChange={(e) => setExtNewCheckOut(e.target.value)} className="px-2 py-1 border rounded" />
+                      <button onClick={async () => {
+                        if (!extNewCheckOut) { setExtError('Select a new check-out'); return; }
+                        setExtLoading(true); setExtError(null); setExtSuccess(null);
+                        try {
+                          const res = await fetch('/api/extensions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bookingId: booking.id, newCheckOut: extNewCheckOut, paid: true, createdBy: null }) });
+                          const data = await res.json();
+                          if (!res.ok) { setExtError(data.error || 'Failed to create extension'); setExtLoading(false); return; }
+                          setExtSuccess(`Extension created: GH₵ ${data.extension.amount}`);
+                          setExtEditingId(null);
+                          // refresh quick view
+                          fetchData();
+                        } catch (e) {
+                          console.error(e); setExtError('Failed to create extension');
+                        } finally { setExtLoading(false); }
+                      }} className="px-3 py-1.5 bg-primary text-white rounded">Create</button>
+                      <button onClick={() => setExtEditingId(null)} className="px-2 py-1 bg-cream rounded">Cancel</button>
+                    </div>
+                  ) : (
+                    <button onClick={() => {
+                      // prefill new date as next day after current checkOut
+                      const cur = new Date(booking.checkOut);
+                      const next = new Date(cur.getTime() + 24 * 60 * 60 * 1000);
+                      setExtNewCheckOut(next.toISOString().split('T')[0]);
+                      setExtEditingId(booking.id);
+                      setExtError(null); setExtSuccess(null);
+                    }} className="px-3 py-1.5 bg-accent text-white rounded">Extend</button>
+                  )}
+                </div>
               </div>
             ))
           }
@@ -452,6 +499,36 @@ export default function ReceptionPage() {
                 <div className="flex-1 min-w-[120px]"><p className="font-medium text-charcoal">{booking.guestName}</p><p className="text-xs text-slate">{booking.guestPhone || booking.guestEmail}</p></div>
                 <div className="flex-1 min-w-[100px]"><p className="text-sm">Room ({rooms.join(", ")})</p><p className="text-xs text-slate">Checkout: {booking.checkOut}</p></div>
                 <p className="text-sm font-medium text-accent">Ready for checkout</p>
+                <div className="flex items-center gap-2">
+                  {extEditingId === booking.id ? (
+                    <div className="flex items-center gap-2">
+                      <input type="date" value={extNewCheckOut} onChange={(e) => setExtNewCheckOut(e.target.value)} className="px-2 py-1 border rounded" />
+                      <button onClick={async () => {
+                        if (!extNewCheckOut) { setExtError('Select a new check-out'); return; }
+                        setExtLoading(true); setExtError(null); setExtSuccess(null);
+                        try {
+                          const res = await fetch('/api/extensions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bookingId: booking.id, newCheckOut: extNewCheckOut, paid: true, createdBy: null }) });
+                          const data = await res.json();
+                          if (!res.ok) { setExtError(data.error || 'Failed to create extension'); setExtLoading(false); return; }
+                          setExtSuccess(`Extension created: GH₵ ${data.extension.amount}`);
+                          setExtEditingId(null);
+                          fetchData();
+                        } catch (e) {
+                          console.error(e); setExtError('Failed to create extension');
+                        } finally { setExtLoading(false); }
+                      }} className="px-3 py-1.5 bg-primary text-white rounded">Create</button>
+                      <button onClick={() => setExtEditingId(null)} className="px-2 py-1 bg-cream rounded">Cancel</button>
+                    </div>
+                  ) : (
+                    <button onClick={() => {
+                      const cur = new Date(booking.checkOut);
+                      const next = new Date(cur.getTime() + 24 * 60 * 60 * 1000);
+                      setExtNewCheckOut(next.toISOString().split('T')[0]);
+                      setExtEditingId(booking.id);
+                      setExtError(null); setExtSuccess(null);
+                    }} className="px-3 py-1.5 bg-accent text-white rounded">Extend</button>
+                  )}
+                </div>
               </div>
             ))
           }

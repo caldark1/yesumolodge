@@ -11,6 +11,12 @@ export default function ConfirmationContent() {
   const referenceParam = searchParams.get("reference") || searchParams.get("ref") || searchParams.get("reference_id");
   const [status, setStatus] = useState<"checking" | "success" | "pending" | "failed">("checking");
   const [details, setDetails] = useState<Record<string, unknown>>({});
+  const [booking, setBooking] = useState<any | null>(null);
+  const [newCheckOut, setNewCheckOut] = useState<string>("");
+  const [extLoading, setExtLoading] = useState(false);
+  const [extError, setExtError] = useState<string | null>(null);
+  const [extensionCreated, setExtensionCreated] = useState<any | null>(null);
+  const [extPayRef, setExtPayRef] = useState<string | null>(null);
 
   useEffect(() => {
     if (!referenceParam) {
@@ -18,6 +24,17 @@ export default function ConfirmationContent() {
       return;
     }
     checkPayment();
+    // Also try to load booking record for this reference to enable extension actions
+    (async () => {
+      try {
+        const res = await fetch('/api/bookings');
+        const data = await res.json();
+        const found = data.bookings?.find((b: any) => (b.booking.bookingId === referenceParam || b.booking.groupBookingId === referenceParam));
+        if (found) setBooking(found.booking);
+      } catch (e) {
+        // ignore
+      }
+    })();
   }, [referenceParam]);
 
   const checkPayment = async () => {
@@ -109,6 +126,49 @@ export default function ConfirmationContent() {
                 </div>
                 <button onClick={checkPayment} className="px-6 py-2 bg-primary text-white rounded-lg text-sm hover:bg-primary-dark transition-colors">Check Again</button>
               </>
+            )}
+            {/* Extension UI */}
+            {booking && (
+              <div className="mt-6 text-left">
+                <h3 className="text-sm font-medium text-charcoal mb-2">Extend Your Stay</h3>
+                <p className="text-xs text-slate mb-2">Select a new check-out date to extend your stay. The extra nights will be calculated and payable.</p>
+                <div className="flex gap-2 mb-2">
+                  <input type="date" value={newCheckOut} onChange={(e) => setNewCheckOut(e.target.value)} min={new Date().toISOString().split('T')[0]} className="px-3 py-2 rounded-lg border border-cream-dark" />
+                  <button onClick={async () => {
+                    if (!newCheckOut) { setExtError('Please select a new check-out date'); return; }
+                    setExtLoading(true); setExtError(null);
+                    try {
+                      const res = await fetch('/api/extensions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bookingId: booking.id, newCheckOut }) });
+                      const data = await res.json();
+                      if (!res.ok) { setExtError(data.error || 'Failed to create extension'); setExtLoading(false); return; }
+                      setExtensionCreated(data.extension);
+                      setExtLoading(false);
+                    } catch (e) { setExtError('Failed to create extension'); setExtLoading(false); }
+                  }} className="px-4 py-2 bg-primary text-white rounded-lg">Create Extension</button>
+                </div>
+                {extError && <p className="text-xs text-danger mb-2">{extError}</p>}
+                {extensionCreated && (
+                  <div className="bg-cream rounded-lg p-3 mb-2">
+                    <div className="flex justify-between text-sm"><span>Extra Nights</span><span>{extensionCreated.extraNights}</span></div>
+                    <div className="flex justify-between text-sm"><span>Amount</span><span className="font-medium">GH₵ {extensionCreated.amount}</span></div>
+                    <div className="mt-3">
+                      <button onClick={async () => {
+                        // initialize payment for extension
+                        try {
+                          setExtLoading(true);
+                          const res = await fetch('/api/payments/initialize', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ extensionId: extensionCreated.id }) });
+                          const data = await res.json();
+                          if (!res.ok) { setExtError(data.error || 'Failed to initialize payment'); setExtLoading(false); return; }
+                          setExtPayRef(data.reference);
+                          // redirect to Paystack if authorization url present
+                          if (data.authorizationUrl) window.location.href = data.authorizationUrl;
+                          setExtLoading(false);
+                        } catch (e) { setExtError('Failed to initialize extension payment'); setExtLoading(false); }
+                      }} className="px-4 py-2 bg-accent text-white rounded-lg">Pay GH₵ {extensionCreated.amount}</button>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
             {status === "failed" && (
               <>

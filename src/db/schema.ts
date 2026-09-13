@@ -69,10 +69,26 @@ export const bookings = pgTable("bookings", {
 export const payments = pgTable("payments", {
   id: serial("id").primaryKey(),
   bookingId: integer("booking_id").references(() => bookings.id, { onDelete: "cascade" }).notNull(),
+  extensionId: integer("extension_id").references(() => bookings.id, { onDelete: "set null" }),
   reference: text("reference").notNull().unique(),
   amount: integer("amount").notNull(),
   bookingIds: jsonb("booking_ids"),
   status: text("status").default("pending").notNull(),
   paystackResponse: jsonb("paystack_response"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const extensions = pgTable("extensions", {
+  id: serial("id").primaryKey(),
+  bookingId: integer("booking_id").references(() => bookings.id, { onDelete: "cascade" }).notNull(),
+  groupBookingId: text("group_booking_id"),
+  oldCheckOut: date("old_check_out").notNull(),
+  newCheckOut: date("new_check_out").notNull(),
+  extraNights: integer("extra_nights").notNull(),
+  amount: integer("amount").notNull(),
+  paymentStatus: paymentStatusEnum("payment_status").default("unpaid").notNull(),
+  note: text("note"),
+  createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

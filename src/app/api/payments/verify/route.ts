@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { bookings, rooms, payments } from "@/db/schema";
+import { bookings, rooms, payments, extensions } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { verifyTransaction } from "@/lib/paystack";
 
@@ -124,6 +124,20 @@ export async function GET(request: NextRequest) {
           })
           .where(eq(payments.reference, refToVerify));
         console.log("Updated payment record id=", payment.id, "to success for reference=", refToVerify);
+        // If this payment was for an extension, mark the extension paid and update booking checkOut
+        try {
+          if (payment.extensionId) {
+            const [ext] = await db.select().from(extensions).where(eq(extensions.id, payment.extensionId)).limit(1);
+            if (ext) {
+              await db.update(extensions).set({ paymentStatus: "paid", updatedAt: new Date() }).where(eq(extensions.id, ext.id));
+              // Update booking checkOut to extension.newCheckOut
+              await db.update(bookings).set({ checkOut: ext.newCheckOut, updatedAt: new Date() }).where(eq(bookings.id, ext.bookingId));
+              console.log(`Marked extension id=${ext.id} paid and updated booking id=${ext.bookingId} checkOut to ${ext.newCheckOut}`);
+            }
+          }
+        } catch (e) {
+          console.warn("Failed to mark extension paid:", e);
+        }
       }
 
       // Determine bookings to update: prefer payment.bookingIds, otherwise bookings with this paystack reference
@@ -220,6 +234,19 @@ export async function POST(request: NextRequest) {
           await db.update(bookings).set({ paymentStatus: "paid", status: "confirmed", updatedAt: new Date() }).where(eq(bookings.id, booking.id));
           await db.update(rooms).set({ status: "booked", updatedAt: new Date() }).where(eq(rooms.id, booking.roomId));
           console.log(`Webhook updated booking id=${booking.id} to paid/confirmed and marked room id=${booking.roomId} as booked`);
+        }
+        // If this payment is tied to an extension, update the extension and booking checkOut
+        try {
+          if (payment && payment.extensionId) {
+            const [ext] = await db.select().from(extensions).where(eq(extensions.id, payment.extensionId)).limit(1);
+            if (ext) {
+              await db.update(extensions).set({ paymentStatus: "paid", updatedAt: new Date() }).where(eq(extensions.id, ext.id));
+              await db.update(bookings).set({ checkOut: ext.newCheckOut, updatedAt: new Date() }).where(eq(bookings.id, ext.bookingId));
+              console.log(`Webhook marked extension id=${ext.id} paid and updated booking id=${ext.bookingId} checkOut to ${ext.newCheckOut}`);
+            }
+          }
+        } catch (e) {
+          console.warn("Webhook: failed to update extension:", e);
         }
       } else {
         if (!payment) console.warn(`Webhook: no payment record found for reference=${reference}`);
