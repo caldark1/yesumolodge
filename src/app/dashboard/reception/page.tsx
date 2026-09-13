@@ -17,6 +17,7 @@ interface BookingWithRoom {
   booking: {
     id: number;
     bookingId: string;
+    groupBookingId?: string;
     guestName: string;
     guestEmail: string;
     guestPhone: string | null;
@@ -108,11 +109,9 @@ export default function ReceptionPage() {
     if (!mounted) { setWalkInError("Please wait a moment and try again"); setWalkInLoading(false); return; }
 
     const roomsCount = parseInt(walkInForm.numberOfRooms || "1");
-    let selectedRoom: Room | undefined = undefined;
-    if (roomsCount === 1) {
-      selectedRoom = rooms.find((r) => r.id === parseInt(walkInForm.roomId));
-      if (!selectedRoom) { setWalkInError("Please select a room"); setWalkInLoading(false); return; }
-    }
+    // Always try to resolve selectedRoom from roomId if provided; require it only for single-room bookings
+    const selectedRoom: Room | undefined = walkInForm.roomId ? rooms.find((r) => r.id === parseInt(walkInForm.roomId)) : undefined;
+    if (roomsCount === 1 && !selectedRoom) { setWalkInError("Please select a room"); setWalkInLoading(false); return; }
 
     const checkIn = today;
     const checkOut = computeCheckOut();
@@ -137,7 +136,6 @@ export default function ReceptionPage() {
         } else {
           // Create multiple walk-in bookings in the same category (auto-assign)
           body = {
-            category: selectedRoom.category,
             guestName: walkInForm.guestName,
             guestEmail: `walkin-${Date.now()}@williamsyesumo.com`,
             guestPhone: walkInForm.guestPhone,
@@ -146,7 +144,8 @@ export default function ReceptionPage() {
             isGuest: true,
             source: "walk_in",
             quantity: roomsCount,
-          };
+          } as any;
+          if (selectedRoom && selectedRoom.category) body.category = selectedRoom.category;
         }
       } else {
         body = {

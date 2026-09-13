@@ -459,7 +459,7 @@ export default function BookingPageContent() {
               <div className="bg-cream rounded-lg p-4 mb-6">
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between"><span className="text-slate">Booking ID</span><span className="font-medium">{bookingResult.bookingId}</span></div>
-                  <div className="flex justify-between"><span className="text-slate">Room Type</span><span>{categoryLabels[bookingResult.category]?.name}</span></div>
+                  <div className="flex justify-between"><span className="text-slate">Room Type</span><span>{bookingResult.category ? categoryLabels[bookingResult.category]?.name : (selectedCategory ? categoryLabels[selectedCategory]?.name : '')}</span></div>
                   <div className="flex justify-between"><span className="text-slate">Check-in</span><span>{checkIn}</span></div>
                   <div className="flex justify-between"><span className="text-slate">Check-out</span><span>{checkOut}</span></div>
                   <div className="flex justify-between"><span className="text-slate">Nights</span><span>{bookingResult.nights}</span></div>

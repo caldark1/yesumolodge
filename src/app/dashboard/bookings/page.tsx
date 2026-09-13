@@ -6,6 +6,7 @@ interface BookingWithRoom {
   booking: {
     id: number;
     bookingId: string;
+    groupBookingId?: string;
     guestName: string;
     guestEmail: string;
     guestPhone: string | null;
