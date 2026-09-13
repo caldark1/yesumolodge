@@ -47,6 +47,7 @@ export const rooms = pgTable("rooms", {
 export const bookings = pgTable("bookings", {
   id: serial("id").primaryKey(),
   bookingId: text("booking_id").notNull().unique(),
+  groupBookingId: text("group_booking_id"),
   userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
   roomId: integer("room_id").references(() => rooms.id, { onDelete: "restrict" }).notNull(),
   guestName: text("guest_name").notNull(),
@@ -70,6 +71,7 @@ export const payments = pgTable("payments", {
   bookingId: integer("booking_id").references(() => bookings.id, { onDelete: "cascade" }).notNull(),
   reference: text("reference").notNull().unique(),
   amount: integer("amount").notNull(),
+  bookingIds: jsonb("booking_ids"),
   status: text("status").default("pending").notNull(),
   paystackResponse: jsonb("paystack_response"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

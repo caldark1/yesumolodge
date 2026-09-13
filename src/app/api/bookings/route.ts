@@ -54,19 +54,21 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const {
       roomId,
+      roomIds,
       category, // For customer bookings: auto-assign from category
       guestName, guestEmail, guestPhone,
       checkIn, checkOut,
       userId, isGuest,
       source, // "online" or "walk_in"
+      quantity = 1,
     } = body;
 
     if (!guestName || !guestEmail || !checkIn || !checkOut) {
       return NextResponse.json({ error: "Guest name, email, check-in and check-out dates are required" }, { status: 400 });
     }
 
-    if (!roomId && !category) {
-      return NextResponse.json({ error: "Either a room ID or category must be specified" }, { status: 400 });
+    if (!roomId && !category && !(roomIds && Array.isArray(roomIds) && roomIds.length > 0)) {
+      return NextResponse.json({ error: "Either a room ID, room IDs, or category must be specified" }, { status: 400 });
     }
 
     // Validate dates
@@ -78,23 +80,32 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Check-out date must be after check-in date" }, { status: 400 });
     }
 
-    let assignedRoomId = roomId;
+    // Support booking multiple rooms (quantity)
 
-    // If category is provided instead of roomId, auto-assign an available room
+    // Prepare assignedRoomIds
+    let assignedRoomIds: number[] = [];
+
+    // If roomIds provided (explicit selection), use those
+    if (roomIds && Array.isArray(roomIds) && roomIds.length > 0) {
+      assignedRoomIds = roomIds.map((id: any) => parseInt(id));
+    }
+
+    // If category is provided instead of roomId, auto-assign available rooms
     if (!roomId && category) {
       const categoryRooms = await db
         .select()
         .from(rooms)
         .where(and(eq(rooms.category, category as "queen" | "deluxe" | "standard"), eq(rooms.status, "available")));
 
-      // Find first room with no conflicting bookings
-      for (const room of categoryRooms) {
+      // Try to find up to `quantity` rooms with no conflicting bookings
+      for (const roomCandidate of categoryRooms) {
+        if (assignedRoomIds.length >= quantity) break;
         const conflicting = await db
           .select({ id: bookings.id })
           .from(bookings)
           .where(
             and(
-              eq(bookings.roomId, room.id),
+              eq(bookings.roomId, roomCandidate.id),
               ne(bookings.status, "cancelled"),
               lte(bookings.checkIn, checkOut),
               gte(bookings.checkOut, checkIn)
@@ -103,88 +114,119 @@ export async function POST(request: NextRequest) {
           .limit(1);
 
         if (conflicting.length === 0) {
-          assignedRoomId = room.id;
-          break;
+          assignedRoomIds.push(roomCandidate.id);
         }
       }
 
-      if (!assignedRoomId) {
-        return NextResponse.json({ error: "No available rooms in this category for the selected dates" }, { status: 409 });
+      if (assignedRoomIds.length < quantity) {
+        return NextResponse.json({ error: "Not enough available rooms in this category for the selected dates" }, { status: 409 });
       }
     }
 
-    // Get the assigned room
-    const [room] = await db.select().from(rooms).where(eq(rooms.id, assignedRoomId)).limit(1);
-    if (!room) {
-      return NextResponse.json({ error: "Room not found" }, { status: 404 });
-    }
-    if (room.status === "maintenance") {
-      return NextResponse.json({ error: "Room is under maintenance" }, { status: 400 });
+    // If a specific roomId was provided, treat as single booking
+    const singleRoomMode = !!roomId;
+    if (singleRoomMode) {
+      assignedRoomIds = [roomId];
     }
 
-    // Double-check availability for the specific room
-    const conflicting = await db
-      .select({ id: bookings.id })
-      .from(bookings)
-      .where(
-        and(
-          eq(bookings.roomId, assignedRoomId),
-          ne(bookings.status, "cancelled"),
-          lte(bookings.checkIn, checkOut),
-          gte(bookings.checkOut, checkIn)
+    // Validate and fetch all assigned rooms (fetch each by id)
+    const fetchedRooms: any[] = [];
+    for (const id of assignedRoomIds) {
+      const [r] = await db.select().from(rooms).where(eq(rooms.id, id)).limit(1);
+      if (!r) {
+        return NextResponse.json({ error: "Room(s) not found" }, { status: 404 });
+      }
+      fetchedRooms.push(r);
+    }
+
+    // Double-check availability and maintenance for each assigned room
+    for (const r of fetchedRooms) {
+      if (r.status === "maintenance") {
+        return NextResponse.json({ error: "One of the selected rooms is under maintenance" }, { status: 400 });
+      }
+      const conflict = await db
+        .select({ id: bookings.id })
+        .from(bookings)
+        .where(
+          and(
+            eq(bookings.roomId, r.id),
+            ne(bookings.status, "cancelled"),
+            lte(bookings.checkIn, checkOut),
+            gte(bookings.checkOut, checkIn)
+          )
         )
-      )
-      .limit(1);
-
-    if (conflicting.length > 0) {
-      return NextResponse.json({ error: "Room is not available for the selected dates" }, { status: 409 });
+        .limit(1);
+      if (conflict.length > 0) {
+        return NextResponse.json({ error: `Room ${r.roomNumber} is not available for the selected dates` }, { status: 409 });
+      }
     }
 
-    // Calculate total amount
+    // Calculate nights
     const nights = Math.ceil((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / (1000 * 60 * 60 * 24));
-    const amount = room.price * nights;
-
-    // Generate unique booking ID
-    const bookingId = await generateBookingId();
 
     const bookingSource = source === "walk_in" ? "walk_in" : "online";
-
-    // For walk-in bookings, mark as confirmed and paid immediately
     const isWalkIn = bookingSource === "walk_in";
     const bookingStatus = isWalkIn ? "confirmed" : "pending";
     const paymentStatus = isWalkIn ? "paid" : "unpaid";
 
-    // Create booking
-    const [newBooking] = await db
-      .insert(bookings)
-      .values({
-        bookingId,
-        userId: userId || null,
-        roomId: assignedRoomId,
-        guestName,
-        guestEmail,
-        guestPhone: guestPhone || null,
-        checkIn,
-        checkOut,
-        status: bookingStatus,
-        amount,
-        paymentStatus,
-        isGuest: isGuest || false,
-        source: bookingSource,
-      })
-      .returning();
+    // Create bookings for each assigned room
+    const createdBookings: any[] = [];
+    let totalAmount = 0;
+    // Use a single group booking code (same format as booking IDs)
+    const sharedGroupCode = await generateBookingId();
+    for (const r of fetchedRooms) {
+      const amount = r.price * nights;
+      totalAmount += amount;
+      // Each row needs its own unique bookingId (DB enforces unique constraint)
+      const bookingId = await generateBookingId();
+      let newBooking: any;
+      try {
+        [newBooking] = await db.insert(bookings).values({
+          bookingId,
+          groupBookingId: sharedGroupCode,
+          userId: userId || null,
+          roomId: r.id,
+          guestName,
+          guestEmail,
+          guestPhone: guestPhone || null,
+          checkIn,
+          checkOut,
+          status: bookingStatus,
+          amount,
+          paymentStatus,
+          isGuest: isGuest || false,
+          source: bookingSource,
+        }).returning();
+      } catch (e) {
+        console.warn("Could not insert groupBookingId (column may not exist), retrying without it", e);
+        [newBooking] = await db.insert(bookings).values({
+          bookingId,
+          userId: userId || null,
+          roomId: r.id,
+          guestName,
+          guestEmail,
+          guestPhone: guestPhone || null,
+          checkIn,
+          checkOut,
+          status: bookingStatus,
+          amount,
+          paymentStatus,
+          isGuest: isGuest || false,
+          source: bookingSource,
+        }).returning();
+      }
 
-    // For walk-in, mark room as booked immediately
-    if (isWalkIn) {
-      await db.update(rooms).set({ status: "booked", updatedAt: new Date() }).where(eq(rooms.id, assignedRoomId));
+      createdBookings.push({ booking: newBooking, roomNumber: r.roomNumber, category: r.category });
+
+      if (isWalkIn) {
+        await db.update(rooms).set({ status: "booked", updatedAt: new Date() }).where(eq(rooms.id, r.id));
+      }
     }
 
     return NextResponse.json({
-      booking: newBooking,
-      roomNumber: room.roomNumber,
-      category: room.category,
+      bookings: createdBookings,
       nights,
-      amount,
+      amount: totalAmount,
     }, { status: 201 });
   } catch (error) {
     console.error("Create booking error:", error);

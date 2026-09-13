@@ -24,16 +24,31 @@ export async function GET(request: NextRequest) {
       console.log(`Found exact payment record id=${exactPayment.id} bookingId=${exactPayment.bookingId}`);
     } else {
       // Try to resolve as booking code -> lookup booking.paystackReference or payment by bookingId
-      const [bookingByCode] = await db.select().from(bookings).where(eq(bookings.bookingId, reference)).limit(1);
-      if (bookingByCode) {
-        console.log(`Found booking by code=${bookingByCode.bookingId} id=${bookingByCode.id} paystackReference=${bookingByCode.paystackReference}`);
-        if (bookingByCode.paystackReference) {
-          refToVerify = bookingByCode.paystackReference;
+      // Try to resolve as booking code -> lookup by groupBookingId or bookingId
+      const [bookingByGroup] = await db.select().from(bookings).where(eq(bookings.groupBookingId, reference)).limit(1);
+      if (bookingByGroup) {
+        console.log(`Found booking by group code=${bookingByGroup.groupBookingId} id=${bookingByGroup.id} paystackReference=${bookingByGroup.paystackReference}`);
+        if (bookingByGroup.paystackReference) {
+          refToVerify = bookingByGroup.paystackReference;
         } else {
-          const [paymentByBooking] = await db.select().from(payments).where(eq(payments.bookingId, bookingByCode.id)).limit(1);
+          const [paymentByBooking] = await db.select().from(payments).where(eq(payments.bookingId, bookingByGroup.id)).limit(1);
           if (paymentByBooking) {
             refToVerify = paymentByBooking.reference;
-            console.log(`Found payment by booking id=${bookingByCode.id} reference=${refToVerify}`);
+            console.log(`Found payment by booking id=${bookingByGroup.id} reference=${refToVerify}`);
+          }
+        }
+      } else {
+        const [bookingByCode] = await db.select().from(bookings).where(eq(bookings.bookingId, reference)).limit(1);
+        if (bookingByCode) {
+          console.log(`Found booking by code=${bookingByCode.bookingId} id=${bookingByCode.id} paystackReference=${bookingByCode.paystackReference}`);
+          if (bookingByCode.paystackReference) {
+            refToVerify = bookingByCode.paystackReference;
+          } else {
+            const [paymentByBooking] = await db.select().from(payments).where(eq(payments.bookingId, bookingByCode.id)).limit(1);
+            if (paymentByBooking) {
+              refToVerify = paymentByBooking.reference;
+              console.log(`Found payment by booking id=${bookingByCode.id} reference=${refToVerify}`);
+            }
           }
         }
       }
@@ -43,6 +58,38 @@ export async function GET(request: NextRequest) {
     if (!refToVerify) {
       refToVerify = reference;
       console.log(`No mapped payment found; will verify provided reference=${reference}`);
+    }
+
+    // If we already have a payment record marked success in DB, prefer that and ensure bookings are updated
+    const [existingPaymentRecord] = await db.select().from(payments).where(eq(payments.reference, refToVerify)).limit(1);
+    if (existingPaymentRecord && existingPaymentRecord.status === "success") {
+      // Ensure related bookings are marked paid/confirmed (in case webhook didn't finish)
+      let bookingIdsToUpdate: number[] = [];
+      try {
+        if (existingPaymentRecord.bookingIds) {
+          bookingIdsToUpdate = typeof existingPaymentRecord.bookingIds === "string" ? JSON.parse(existingPaymentRecord.bookingIds) : existingPaymentRecord.bookingIds;
+        } else if (existingPaymentRecord.bookingId) {
+          bookingIdsToUpdate = [existingPaymentRecord.bookingId];
+        }
+      } catch (e) {
+        bookingIdsToUpdate = existingPaymentRecord.bookingId ? [existingPaymentRecord.bookingId] : [];
+      }
+
+      if (!bookingIdsToUpdate || bookingIdsToUpdate.length === 0) {
+        const bookingsWithRef = await db.select().from(bookings).where(eq(bookings.paystackReference, refToVerify));
+        bookingIdsToUpdate = bookingsWithRef.map((b: any) => b.id);
+      }
+
+      for (const bid of bookingIdsToUpdate) {
+        const [booking] = await db.select().from(bookings).where(eq(bookings.id, bid)).limit(1);
+        if (!booking) continue;
+        if (booking.paymentStatus !== "paid") {
+          await db.update(bookings).set({ paymentStatus: "paid", status: "confirmed", updatedAt: new Date() }).where(eq(bookings.id, booking.id));
+          await db.update(rooms).set({ status: "booked", updatedAt: new Date() }).where(eq(rooms.id, booking.roomId));
+        }
+      }
+
+      return NextResponse.json({ status: "success", amount: existingPaymentRecord.amount, reference: existingPaymentRecord.reference });
     }
 
     // Verify with Paystack
@@ -67,8 +114,8 @@ export async function GET(request: NextRequest) {
         .limit(1);
       console.log("Lookup payment by reference=", refToVerify, "found=", !!payment, "id=", payment?.id, "bookingId=", payment?.bookingId);
 
+      // If payment record exists and is not yet marked success, update it
       if (payment && payment.status !== "success") {
-        // Update payment status
         await db
           .update(payments)
           .set({
@@ -77,32 +124,34 @@ export async function GET(request: NextRequest) {
           })
           .where(eq(payments.reference, refToVerify));
         console.log("Updated payment record id=", payment.id, "to success for reference=", refToVerify);
+      }
 
-        // Update booking payment status and confirm booking
-        const [booking] = await db
-          .select()
-          .from(bookings)
-          .where(eq(bookings.id, payment.bookingId))
-          .limit(1);
-        console.log("Lookup booking by id=", payment.bookingId, "found=", !!booking, "bookingId=", booking?.bookingId);
+      // Determine bookings to update: prefer payment.bookingIds, otherwise bookings with this paystack reference
+      let bookingIdsToUpdate: number[] = [];
+      if (payment) {
+        try {
+          if (payment.bookingIds) {
+            bookingIdsToUpdate = typeof payment.bookingIds === "string" ? JSON.parse(payment.bookingIds) : payment.bookingIds;
+          } else if (payment.bookingId) {
+            bookingIdsToUpdate = [payment.bookingId];
+          }
+        } catch (e) {
+          bookingIdsToUpdate = payment.bookingId ? [payment.bookingId] : [];
+        }
+      }
 
-        if (booking) {
-          await db
-            .update(bookings)
-            .set({
-              paymentStatus: "paid",
-              status: "confirmed",
-              updatedAt: new Date(),
-            })
-            .where(eq(bookings.id, booking.id));
-          console.log(`Updated booking id=${booking.id} paymentStatus=paid status=confirmed`);
+      if (!bookingIdsToUpdate || bookingIdsToUpdate.length === 0) {
+        const bookingsWithRef = await db.select().from(bookings).where(eq(bookings.paystackReference, refToVerify));
+        bookingIdsToUpdate = bookingsWithRef.map((b: any) => b.id);
+      }
 
-          // Mark room as booked
-          await db
-            .update(rooms)
-            .set({ status: "booked", updatedAt: new Date() })
-            .where(eq(rooms.id, booking.roomId));
-          console.log(`Marked room id=${booking.roomId} as booked`);
+      for (const bid of bookingIdsToUpdate) {
+        const [booking] = await db.select().from(bookings).where(eq(bookings.id, bid)).limit(1);
+        if (!booking) continue;
+        if (booking.paymentStatus !== "paid") {
+          await db.update(bookings).set({ paymentStatus: "paid", status: "confirmed", updatedAt: new Date() }).where(eq(bookings.id, booking.id));
+          await db.update(rooms).set({ status: "booked", updatedAt: new Date() }).where(eq(rooms.id, booking.roomId));
+          console.log(`Updated booking id=${booking.id} to paid/confirmed and marked room id=${booking.roomId} as booked`);
         }
       }
     }
@@ -148,30 +197,29 @@ export async function POST(request: NextRequest) {
           })
           .where(eq(payments.reference, reference));
         console.log(`Webhook updated payment id=${payment.id} to success`);
+        // Update all bookings related to this payment.
+        let bookingIdsToUpdate: number[] = [];
+        try {
+          if (payment.bookingIds) {
+            bookingIdsToUpdate = typeof payment.bookingIds === "string" ? JSON.parse(payment.bookingIds) : payment.bookingIds;
+          } else if (payment.bookingId) {
+            bookingIdsToUpdate = [payment.bookingId];
+          }
+        } catch (e) {
+          bookingIdsToUpdate = payment.bookingId ? [payment.bookingId] : [];
+        }
 
-        const [booking] = await db
-          .select()
-          .from(bookings)
-          .where(eq(bookings.id, payment.bookingId))
-          .limit(1);
-        console.log(`Webhook lookup booking id=${payment.bookingId}: found=${!!booking} bookingId=${booking?.bookingId}`);
+        if (!bookingIdsToUpdate || bookingIdsToUpdate.length === 0) {
+          const bookingsWithRef = await db.select().from(bookings).where(eq(bookings.paystackReference, reference));
+          bookingIdsToUpdate = bookingsWithRef.map((b: any) => b.id);
+        }
 
-        if (booking) {
-          await db
-            .update(bookings)
-            .set({
-              paymentStatus: "paid",
-              status: "confirmed",
-              updatedAt: new Date(),
-            })
-            .where(eq(bookings.id, booking.id));
-          console.log(`Webhook updated booking id=${booking.id} to paid/confirmed`);
-
-          await db
-            .update(rooms)
-            .set({ status: "booked", updatedAt: new Date() })
-            .where(eq(rooms.id, booking.roomId));
-          console.log(`Webhook marked room id=${booking.roomId} as booked`);
+        for (const bid of bookingIdsToUpdate) {
+          const [booking] = await db.select().from(bookings).where(eq(bookings.id, bid)).limit(1);
+          if (!booking) continue;
+          await db.update(bookings).set({ paymentStatus: "paid", status: "confirmed", updatedAt: new Date() }).where(eq(bookings.id, booking.id));
+          await db.update(rooms).set({ status: "booked", updatedAt: new Date() }).where(eq(rooms.id, booking.roomId));
+          console.log(`Webhook updated booking id=${booking.id} to paid/confirmed and marked room id=${booking.roomId} as booked`);
         }
       } else {
         if (!payment) console.warn(`Webhook: no payment record found for reference=${reference}`);

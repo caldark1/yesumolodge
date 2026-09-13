@@ -38,10 +38,11 @@ const paymentColors: Record<string, string> = {
   paid: "text-success",
   unpaid: "text-danger",
   refunded: "text-warning",
+  partial: "text-warning",
 };
 
 export default function DashboardBookingsPage() {
-  const [bookings, setBookings] = useState<BookingWithRoom[]>([]);
+  const [bookings, setBookings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
@@ -53,7 +54,36 @@ export default function DashboardBookingsPage() {
       if (statusFilter !== "all") params.set("status", statusFilter);
       const res = await fetch(`/api/bookings?${params}`);
       const data = await res.json();
-      setBookings(data.bookings || []);
+      const rows: BookingWithRoom[] = data.bookings || [];
+
+      // Aggregate rows by groupBookingId if present, otherwise by bookingId
+      const groups: Record<string, any> = {};
+      for (const row of rows) {
+        const key = row.booking.groupBookingId || row.booking.bookingId;
+        if (!groups[key]) {
+          groups[key] = {
+            booking: { ...row.booking, bookingId: key },
+            rooms: [row.room.roomNumber],
+            roomObjects: [row.room],
+            bookingIds: [row.booking.id],
+            totalAmount: row.booking.amount,
+          };
+        } else {
+          groups[key].rooms.push(row.room.roomNumber);
+          groups[key].roomObjects.push(row.room);
+          groups[key].bookingIds.push(row.booking.id);
+          groups[key].totalAmount += row.booking.amount;
+        }
+      }
+
+      // Convert groups to array for display
+      const aggregated = Object.values(groups).map((g: any) => ({
+        booking: { ...g.booking, amount: g.totalAmount, paymentStatus: derivePaymentStatus(g.bookingIds, rows) },
+        room: { roomNumber: g.rooms.join(", ") },
+        bookingIds: g.bookingIds,
+        roomObjects: g.roomObjects,
+      }));
+      setBookings(aggregated || []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -63,18 +93,33 @@ export default function DashboardBookingsPage() {
 
   useEffect(() => { fetchBookings(); }, [statusFilter]);
 
-  const updateBookingStatus = async (id: number, status: string) => {
+  const updateBookingStatus = async (ids: number | number[], status: string) => {
     try {
-      const res = await fetch("/api/bookings", {
+      const idArray = Array.isArray(ids) ? ids : [ids];
+      // Update each booking row in the group
+      await Promise.all(idArray.map((id) => fetch("/api/bookings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, status }),
-      });
-      if (res.ok) fetchBookings();
+      })));
+      fetchBookings();
     } catch (err) {
       console.error(err);
     }
   };
+
+  // Helper to derive aggregate payment status: paid if all paid, unpaid if all unpaid, partial otherwise
+  function derivePaymentStatus(bookingIds: number[], rows: BookingWithRoom[]) {
+    const statuses = bookingIds.map((id) => {
+      const r = rows.find((x) => x.booking.id === id);
+      return r ? r.booking.paymentStatus : "unpaid";
+    });
+    const allPaid = statuses.every((s) => s === "paid");
+    const allUnpaid = statuses.every((s) => s !== "paid");
+    if (allPaid) return "paid";
+    if (allUnpaid) return "unpaid";
+    return "partial";
+  }
 
   const filtered = bookings.filter((b) => {
     if (!search) return true;
@@ -131,14 +176,14 @@ export default function DashboardBookingsPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map(({ booking, room }) => (
-                <tr key={booking.id} className="border-b border-cream-dark/50 hover:bg-cream/30">
+              {filtered.map(({ booking, room, bookingIds }) => (
+                <tr key={booking.bookingId} className="border-b border-cream-dark/50 hover:bg-cream/30">
                   <td className="px-4 py-3 font-mono text-primary">{booking.bookingId}</td>
                   <td className="px-4 py-3">
                     <p className="font-medium text-charcoal">{booking.guestName}</p>
                     <p className="text-xs text-slate">{booking.guestEmail}</p>
                   </td>
-                  <td className="px-4 py-3">Room {room.roomNumber}</td>
+                  <td className="px-4 py-3">Room ({room.roomNumber})</td>
                   <td className="px-4 py-3">{booking.checkIn}</td>
                   <td className="px-4 py-3">{booking.checkOut}</td>
                   <td className="px-4 py-3 font-medium">GH₵ {booking.amount}</td>
@@ -153,14 +198,14 @@ export default function DashboardBookingsPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs font-medium ${paymentColors[booking.paymentStatus]}`}>
+                    <span className={`text-xs font-medium ${paymentColors[booking.paymentStatus] || "text-warning"}`}>
                       {booking.paymentStatus}
                     </span>
                   </td>
                   <td className="px-4 py-3">
                     <select
                       value={booking.status}
-                      onChange={(e) => updateBookingStatus(booking.id, e.target.value)}
+                      onChange={(e) => updateBookingStatus(bookingIds || [booking.id], e.target.value)}
                       className="text-xs px-2 py-1 rounded border border-cream-dark bg-cream focus:ring-1 focus:ring-primary/20 outline-none"
                     >
                       <option value="pending">Pending</option>

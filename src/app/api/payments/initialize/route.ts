@@ -7,70 +7,93 @@ import { initializeTransaction } from "@/lib/paystack";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { bookingId } = body;
+    const { bookingId, bookingIds, bookingCode } = body;
 
-    if (!bookingId) {
-      return NextResponse.json({ error: "Booking ID is required" }, { status: 400 });
+    // Resolve bookings to charge
+    let bookingsToCharge: any[] = [];
+
+    if (bookingCode) {
+      // Load bookings by shared booking code: check groupBookingId first, then bookingId
+      let results = await db.select().from(bookings).where(eq(bookings.groupBookingId, bookingCode));
+      if (!results || results.length === 0) {
+        results = await db.select().from(bookings).where(eq(bookings.bookingId, bookingCode));
+      }
+      if (!results || results.length === 0) return NextResponse.json({ error: `Booking code ${bookingCode} not found` }, { status: 404 });
+      bookingsToCharge = results;
+    } else {
+      if (!bookingId && (!bookingIds || !Array.isArray(bookingIds) || bookingIds.length === 0)) {
+        return NextResponse.json({ error: "Booking ID or bookingIds array is required" }, { status: 400 });
+      }
+
+      let targetBookingIds: number[] = [];
+      if (bookingIds && Array.isArray(bookingIds) && bookingIds.length > 0) {
+        targetBookingIds = bookingIds.map((id: any) => parseInt(id));
+      } else if (bookingId) {
+        targetBookingIds = [parseInt(bookingId)];
+      }
+
+      for (const id of targetBookingIds) {
+        const [b] = await db.select().from(bookings).where(eq(bookings.id, id)).limit(1);
+        if (!b) return NextResponse.json({ error: `Booking ${id} not found` }, { status: 404 });
+        bookingsToCharge.push(b);
+      }
     }
 
-    // Get booking details
-    const [booking] = await db
-      .select()
-      .from(bookings)
-      .where(eq(bookings.id, bookingId))
-      .limit(1);
-
-    if (!booking) {
-      return NextResponse.json({ error: "Booking not found" }, { status: 404 });
+    // Basic validations
+    for (const b of bookingsToCharge) {
+      if (b.paymentStatus === "paid") return NextResponse.json({ error: `Booking ${b.id} has already been paid for` }, { status: 400 });
+      if (b.status === "cancelled") return NextResponse.json({ error: `Booking ${b.id} has been cancelled` }, { status: 400 });
     }
 
-    if (booking.paymentStatus === "paid") {
-      return NextResponse.json({ error: "Booking has already been paid for" }, { status: 400 });
-    }
+    const totalAmount = bookingsToCharge.reduce((sum, b) => sum + b.amount, 0);
 
-    if (booking.status === "cancelled") {
-      return NextResponse.json({ error: "Booking has been cancelled" }, { status: 400 });
-    }
-
-    // Initialize Paystack transaction
-    // Avoid double-prefixing if booking.bookingId already contains the YML- prefix
-    const reference = (booking.bookingId?.startsWith?.("YML-") ? `${booking.bookingId}` : `YML-${booking.bookingId}`) + `-${Date.now()}`;
-    console.log(`Initializing payment for booking.id=${booking.id} booking.bookingId=${booking.bookingId} amount=${booking.amount}`);
+    // Initialize Paystack transaction for total amount
+    const primary = bookingsToCharge[0];
+    const reference = (primary.bookingId?.startsWith?.("YML-") ? `${primary.bookingId}` : `YML-${primary.bookingId}`) + `-${Date.now()}`;
+    console.log(`Initializing payment for bookings=${bookingsToCharge.map((b) => b.id).join(",")} total=${totalAmount}`);
     const result = await initializeTransaction(
-      booking.guestEmail,
-      booking.amount,
+      primary.guestEmail,
+      totalAmount,
       reference,
       {
-        booking_id: booking.id,
-        booking_code: booking.bookingId,
-        guest_name: booking.guestName,
+        booking_ids: bookingsToCharge.map((b) => b.id),
+        booking_code: primary.bookingId,
+        guest_name: primary.guestName,
         custom_fields: [
-          { display_name: "Booking ID", variable_name: "booking_id", value: booking.bookingId },
-          { display_name: "Guest Name", variable_name: "guest_name", value: booking.guestName },
+          { display_name: "Booking IDs", variable_name: "booking_ids", value: JSON.stringify(bookingsToCharge.map((b) => b.id)) },
+          { display_name: "Guest Name", variable_name: "guest_name", value: primary.guestName },
         ],
       }
     );
 
-    // Store payment record
-    const [insertedPayment] = await db.insert(payments).values({
-      bookingId: booking.id,
-      reference: result.data.reference,
-      amount: booking.amount,
-      status: "pending",
-      paystackResponse: result as unknown as Record<string, unknown>,
-    }).returning();
-    console.log(`Stored payment record id=${insertedPayment?.id} reference=${insertedPayment?.reference}`);
+    // Store payment record (link to first bookingId); try to include bookingIds if DB supports it
+    let insertedPayment: any = null;
+    try {
+      [insertedPayment] = await db.insert(payments).values({
+        bookingId: primary.id,
+        bookingIds: JSON.stringify(bookingsToCharge.map((b) => b.id)),
+        reference: result.data.reference,
+        amount: totalAmount,
+        status: "pending",
+        paystackResponse: result as unknown as Record<string, unknown>,
+      }).returning();
+      console.log(`Stored payment record id=${insertedPayment?.id} reference=${insertedPayment?.reference}`);
+    } catch (e) {
+      console.warn("Could not store bookingIds in payments table, falling back to legacy insert", e);
+      [insertedPayment] = await db.insert(payments).values({
+        bookingId: primary.id,
+        reference: result.data.reference,
+        amount: totalAmount,
+        status: "pending",
+        paystackResponse: result as unknown as Record<string, unknown>,
+      }).returning();
+      console.log(`Stored payment record id=${insertedPayment?.id} reference=${insertedPayment?.reference} (legacy)`);
+    }
 
-    // Update booking with Paystack reference
-    await db
-      .update(bookings)
-      .set({
-        paystackReference: result.data.reference,
-        accessCode: result.data.access_code,
-        updatedAt: new Date(),
-      })
-      .where(eq(bookings.id, bookingId));
-    console.log(`Updated booking id=${bookingId} with paystackReference=${result.data.reference}`);
+    // Update each booking with paystack reference/access code
+    for (const b of bookingsToCharge) {
+      await db.update(bookings).set({ paystackReference: result.data.reference, accessCode: result.data.access_code, updatedAt: new Date() }).where(eq(bookings.id, b.id));
+    }
 
     return NextResponse.json({
       accessCode: result.data.access_code,

@@ -40,7 +40,8 @@ export default function ReceptionPage() {
 
   // Walk-in booking form
   const [showWalkIn, setShowWalkIn] = useState(false);
-  const [walkInForm, setWalkInForm] = useState({ guestName: "", guestPhone: "", roomId: "", numberOfDays: "1" });
+  const [walkInForm, setWalkInForm] = useState({ guestName: "", guestPhone: "", roomId: "", numberOfDays: "1", numberOfRooms: "1" });
+  const [selectedRoomIds, setSelectedRoomIds] = useState<number[]>([]);
   const [walkInLoading, setWalkInLoading] = useState(false);
   const [walkInError, setWalkInError] = useState("");
   const [walkInSuccess, setWalkInSuccess] = useState("");
@@ -57,11 +58,46 @@ export default function ReceptionPage() {
 
   useEffect(() => { fetchData(); }, []);
 
-  const today = format(new Date(), "yyyy-MM-dd");
+  const [today, setToday] = useState("");
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    const d = new Date();
+    setToday(d.toISOString().split("T")[0]);
+    setMounted(true);
+  }, []);
+
+  const getDays = () => {
+    const n = parseInt(walkInForm.numberOfDays || "1", 10);
+    return isNaN(n) || n < 1 ? 1 : n;
+  };
+
+  const computeCheckOut = (days?: number) => {
+    if (!mounted) return "";
+    const d = typeof days === "number" ? days : getDays();
+    try {
+      return format(new Date(Date.now() + d * 24 * 60 * 60 * 1000), "yyyy-MM-dd");
+    } catch (e) {
+      return "";
+    }
+  };
   const availableRooms = rooms.filter((r) => r.status === "available");
   const bookedRooms = rooms.filter((r) => r.status === "booked");
-  const arrivals = bookings.filter((b) => b.booking.checkIn === today && b.booking.status === "confirmed");
-  const departures = bookings.filter((b) => b.booking.checkOut === today && (b.booking.status === "confirmed" || b.booking.status === "checked_in"));
+  // Aggregate bookings by groupBookingId or bookingId for arrivals/departures
+  const groupsMap: Record<string, any> = {};
+  for (const b of bookings) {
+    const key = b.booking.groupBookingId || b.booking.bookingId;
+    if (!groupsMap[key]) {
+      groupsMap[key] = { booking: { ...b.booking, bookingId: key }, rooms: [b.room.roomNumber], bookingIds: [b.booking.id], room: b.room };
+    } else {
+      groupsMap[key].rooms.push(b.room.roomNumber);
+      groupsMap[key].bookingIds.push(b.booking.id);
+    }
+  }
+  const aggregatedBookings = Object.values(groupsMap);
+
+  const arrivals = mounted ? aggregatedBookings.filter((g) => g.booking.checkIn === today && g.booking.status === "confirmed") : [];
+  const departures = mounted ? aggregatedBookings.filter((g) => g.booking.checkOut === today && (g.booking.status === "confirmed" || g.booking.status === "checked_in")) : [];
 
   const handleWalkInBooking = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,17 +105,51 @@ export default function ReceptionPage() {
     setWalkInError("");
     setWalkInSuccess("");
 
-    const selectedRoom = rooms.find((r) => r.id === parseInt(walkInForm.roomId));
-    if (!selectedRoom) { setWalkInError("Please select a room"); setWalkInLoading(false); return; }
+    if (!mounted) { setWalkInError("Please wait a moment and try again"); setWalkInLoading(false); return; }
+
+    const roomsCount = parseInt(walkInForm.numberOfRooms || "1");
+    let selectedRoom: Room | undefined = undefined;
+    if (roomsCount === 1) {
+      selectedRoom = rooms.find((r) => r.id === parseInt(walkInForm.roomId));
+      if (!selectedRoom) { setWalkInError("Please select a room"); setWalkInLoading(false); return; }
+    }
 
     const checkIn = today;
-    const checkOut = format(new Date(new Date().getTime() + parseInt(walkInForm.numberOfDays) * 24 * 60 * 60 * 1000), "yyyy-MM-dd");
+    const checkOut = computeCheckOut();
 
     try {
-      const res = await fetch("/api/bookings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      // const roomsCount already defined above
+      let body: any;
+      if (roomsCount > 1) {
+        // If receptionist selected specific rooms, send them explicitly
+        if (selectedRoomIds.length === roomsCount) {
+          body = {
+            roomIds: selectedRoomIds,
+            guestName: walkInForm.guestName,
+            guestEmail: `walkin-${Date.now()}@williamsyesumo.com`,
+            guestPhone: walkInForm.guestPhone,
+            checkIn,
+            checkOut,
+            isGuest: true,
+            source: "walk_in",
+            quantity: roomsCount,
+          };
+        } else {
+          // Create multiple walk-in bookings in the same category (auto-assign)
+          body = {
+            category: selectedRoom.category,
+            guestName: walkInForm.guestName,
+            guestEmail: `walkin-${Date.now()}@williamsyesumo.com`,
+            guestPhone: walkInForm.guestPhone,
+            checkIn,
+            checkOut,
+            isGuest: true,
+            source: "walk_in",
+            quantity: roomsCount,
+          };
+        }
+      } else {
+        body = {
           roomId: parseInt(walkInForm.roomId),
           guestName: walkInForm.guestName,
           guestEmail: `walkin-${Date.now()}@williamsyesumo.com`,
@@ -88,7 +158,13 @@ export default function ReceptionPage() {
           checkOut,
           isGuest: true,
           source: "walk_in",
-        }),
+        };
+      }
+
+      const res = await fetch("/api/bookings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       });
 
       const data = await res.json();
@@ -97,10 +173,18 @@ export default function ReceptionPage() {
         return;
       }
 
-      setWalkInSuccess(`Booking created! ID: ${data.booking.bookingId} — Room ${data.roomNumber} — GH₵ ${data.amount}`);
-      setWalkInForm({ guestName: "", guestPhone: "", roomId: "", numberOfDays: "1" });
+      if (Array.isArray(data.bookings)) {
+        const code = data.bookings[0].booking.groupBookingId || data.bookings[0].booking.bookingId;
+        setWalkInSuccess(`Booking(s) created! Code: ${code} — GH₵ ${data.amount}`);
+      } else {
+        setWalkInSuccess(`Booking created! ID: ${data.booking.bookingId} — Room ${data.roomNumber} — GH₵ ${data.amount}`);
+      }
+
+      setWalkInForm({ guestName: "", guestPhone: "", roomId: "", numberOfDays: "1", numberOfRooms: "1" });
+      setSelectedRoomIds([]);
       fetchData(); // Refresh data
-    } catch {
+    } catch (err) {
+      console.error(err);
       setWalkInError("Failed to create booking");
     } finally {
       setWalkInLoading(false);
@@ -164,35 +248,126 @@ export default function ReceptionPage() {
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-charcoal mb-1.5">Select Available Room *</label>
-                <select value={walkInForm.roomId} onChange={(e) => setWalkInForm({ ...walkInForm, roomId: e.target.value })} required className="w-full px-3 py-2.5 rounded-lg border border-cream-dark bg-cream text-charcoal text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none">
-                  <option value="">Choose a room...</option>
-                  {availableRooms.sort((a, b) => a.roomNumber - b.roomNumber).map((r) => (
-                    <option key={r.id} value={r.id}>Room {r.roomNumber} — {categoryLabels[r.category]} — GH₵ {r.price}/night</option>
-                  ))}
-                </select>
-              </div>
+              {parseInt(walkInForm.numberOfRooms || "1") === 1 ? (
+                <div>
+                  <label className="block text-sm font-medium text-charcoal mb-1.5">Select Available Room *</label>
+                  <select value={walkInForm.roomId} onChange={(e) => setWalkInForm({ ...walkInForm, roomId: e.target.value })} required className="w-full px-3 py-2.5 rounded-lg border border-cream-dark bg-cream text-charcoal text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none">
+                    <option value="">Choose a room...</option>
+                    {availableRooms.sort((a, b) => a.roomNumber - b.roomNumber).map((r) => (
+                      <option key={r.id} value={r.id}>Room {r.roomNumber} — {categoryLabels[r.category]} — GH₵ {r.price}/night</option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-sm font-medium text-charcoal mb-1.5">Assign Specific Rooms (optional)</label>
+                  <p className="text-xs text-slate">You may select specific rooms below, or leave unchecked to auto-assign available rooms in the same category.</p>
+                </div>
+              )}
               <div>
                 <label className="block text-sm font-medium text-charcoal mb-1.5">Number of Days *</label>
                 <input type="number" value={walkInForm.numberOfDays} onChange={(e) => setWalkInForm({ ...walkInForm, numberOfDays: e.target.value })} min="1" max="30" required className="w-full px-3 py-2.5 rounded-lg border border-cream-dark bg-cream text-charcoal text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" />
               </div>
             </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-charcoal mb-1.5">Number of Rooms</label>
+                <input type="number" value={walkInForm.numberOfRooms} onChange={(e) => setWalkInForm({ ...walkInForm, numberOfRooms: e.target.value })} min="1" max={availableRooms.length || 1} className="w-full px-3 py-2.5 rounded-lg border border-cream-dark bg-cream text-charcoal text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" />
+                <p className="text-xs text-slate mt-1">Max {availableRooms.length} rooms available.</p>
+              </div>
+              <div />
+            </div>
+            {/* If receptionist requested multiple rooms allow selecting specific rooms */}
+            {parseInt(walkInForm.numberOfRooms || "1") > 1 && (
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-charcoal mb-2">Select Rooms to Assign</label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {availableRooms.map((r) => {
+                    const checked = selectedRoomIds.includes(r.id);
+                    return (
+                      <label key={r.id} className={`flex items-center gap-2 p-2 border rounded ${checked ? 'bg-primary/5 border-primary' : 'border-cream-dark'}`}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            const max = parseInt(walkInForm.numberOfRooms || '1');
+                            if (e.target.checked) {
+                              if (selectedRoomIds.length < max) setSelectedRoomIds([...selectedRoomIds, r.id]);
+                            } else {
+                              setSelectedRoomIds(selectedRoomIds.filter((id) => id !== r.id));
+                            }
+                          }}
+                        />
+                        <div className="text-sm">
+                          <div className="font-medium">Room {r.roomNumber}</div>
+                          <div className="text-xs text-slate">{categoryLabels[r.category]} — GH₵ {r.price}</div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-slate mt-2">Select exactly {walkInForm.numberOfRooms} rooms before submitting, or leave unchecked to auto-assign.</p>
+              </div>
+            )}
 
-            {selectedRoomForWalkIn && (
+            {mounted && parseInt(walkInForm.numberOfRooms || "1") === 1 && selectedRoomForWalkIn && (
               <div className="bg-cream rounded-lg p-4">
                 <h4 className="font-medium text-charcoal text-sm mb-2">Booking Preview</h4>
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <span className="text-slate">Room:</span><span>Room {selectedRoomForWalkIn.roomNumber} ({categoryLabels[selectedRoomForWalkIn.category]})</span>
                   <span className="text-slate">Check-in:</span><span>{today}</span>
-                  <span className="text-slate">Check-out:</span><span>{format(new Date(new Date().getTime() + parseInt(walkInForm.numberOfDays) * 24 * 60 * 60 * 1000), "yyyy-MM-dd")}</span>
+                  <span className="text-slate">Check-out:</span><span>{computeCheckOut()}</span>
                   <span className="text-slate">Rate:</span><span>GH₵ {selectedRoomForWalkIn.price}/night</span>
                   <span className="text-slate font-medium">Total:</span><span className="font-medium text-primary text-lg">GH₵ {selectedRoomForWalkIn.price * parseInt(walkInForm.numberOfDays)}</span>
                 </div>
               </div>
             )}
 
-            <button type="submit" disabled={walkInLoading || !walkInForm.roomId || !walkInForm.guestName} className="px-6 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary-dark transition-colors disabled:opacity-50">
+            {mounted && parseInt(walkInForm.numberOfRooms || "1") > 1 && (
+              <div className="bg-cream rounded-lg p-4">
+                <h4 className="font-medium text-charcoal text-sm mb-2">Booking Preview (Multiple Rooms)</h4>
+                {selectedRoomIds.length > 0 ? (
+                  <div className="text-sm space-y-2">
+                    <div className="text-xs text-slate">Selected rooms:</div>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedRoomIds.map((id) => {
+                        const r = rooms.find((x) => x.id === id);
+                        if (!r) return null;
+                        return (
+                          <div key={id} className="px-2 py-1 bg-white border rounded text-sm">
+                            Room {r.roomNumber} ({categoryLabels[r.category]}) — GH₵ {r.price}/night
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
+                      <span className="text-slate">Check-in:</span><span>{today}</span>
+                      <span className="text-slate">Check-out:</span><span>{computeCheckOut()}</span>
+                      <span className="text-slate">Rooms:</span><span>{selectedRoomIds.length}</span>
+                      <span className="text-slate font-medium">Total (est.):</span>
+                      <span className="font-medium text-primary text-lg">GH₵ {selectedRoomIds.reduce((s, id) => { const r = rooms.find((x) => x.id === id); return s + (r ? r.price * parseInt(walkInForm.numberOfDays) : 0); }, 0)}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-sm">
+                    <div className="text-xs text-slate">No specific rooms selected — system will auto-assign {walkInForm.numberOfRooms} available rooms in the same category.</div>
+                    <div className="mt-3 text-sm">
+                      <span className="text-slate">Estimated total:</span>
+                      <span className="font-medium text-primary text-lg"> GH₵ {(() => {
+                        // estimate by summing cheapest available rooms up to requested count
+                        const n = parseInt(walkInForm.numberOfRooms || "1");
+                        const sorted = availableRooms.slice().sort((a, b) => a.price - b.price);
+                        const pick = sorted.slice(0, n);
+                        const total = pick.reduce((s, r) => s + r.price * parseInt(walkInForm.numberOfDays || "1"), 0);
+                        return total;
+                      })()}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <button type="submit" disabled={walkInLoading || !mounted || !walkInForm.guestName || (parseInt(walkInForm.numberOfRooms || "1") === 1 && !walkInForm.roomId)} className="px-6 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary-dark transition-colors disabled:opacity-50">
               {walkInLoading ? "Creating Booking..." : "Create Walk-in Booking"}
             </button>
           </form>
@@ -255,10 +430,10 @@ export default function ReceptionPage() {
       {tab === "arrivals" && (
         <div className="space-y-3">
           {arrivals.length === 0 ? <p className="text-center text-slate py-10">No arrivals expected today.</p> :
-            arrivals.map(({ booking, room }) => (
-              <div key={booking.id} className="bg-white rounded-xl border border-cream-dark p-4 flex flex-wrap items-center gap-4">
+            arrivals.map(({ booking, rooms }) => (
+              <div key={booking.bookingId} className="bg-white rounded-xl border border-cream-dark p-4 flex flex-wrap items-center gap-4">
                 <div className="flex-1 min-w-[120px]"><p className="font-medium text-charcoal">{booking.guestName}</p><p className="text-xs text-slate">{booking.guestPhone || booking.guestEmail}</p></div>
-                <div className="flex-1 min-w-[100px]"><p className="text-sm">Room {room.roomNumber}</p><p className="text-xs text-slate">{categoryLabels[room.category]}</p></div>
+                <div className="flex-1 min-w-[100px]"><p className="text-sm">Room ({rooms.join(", ")})</p></div>
                 <div className="flex items-center gap-2">
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${booking.source === "walk_in" ? "bg-accent/10 text-accent" : "bg-primary/10 text-primary"}`}>{booking.source === "walk_in" ? "Walk-in" : "Online"}</span>
                   <p className="text-sm font-medium">GH₵ {booking.amount}</p>
@@ -273,10 +448,10 @@ export default function ReceptionPage() {
       {tab === "departures" && (
         <div className="space-y-3">
           {departures.length === 0 ? <p className="text-center text-slate py-10">No departures expected today.</p> :
-            departures.map(({ booking, room }) => (
-              <div key={booking.id} className="bg-white rounded-xl border border-cream-dark p-4 flex flex-wrap items-center gap-4">
+            departures.map(({ booking, rooms }) => (
+              <div key={booking.bookingId} className="bg-white rounded-xl border border-cream-dark p-4 flex flex-wrap items-center gap-4">
                 <div className="flex-1 min-w-[120px]"><p className="font-medium text-charcoal">{booking.guestName}</p><p className="text-xs text-slate">{booking.guestPhone || booking.guestEmail}</p></div>
-                <div className="flex-1 min-w-[100px]"><p className="text-sm">Room {room.roomNumber}</p><p className="text-xs text-slate">Checkout: {booking.checkOut}</p></div>
+                <div className="flex-1 min-w-[100px]"><p className="text-sm">Room ({rooms.join(", ")})</p><p className="text-xs text-slate">Checkout: {booking.checkOut}</p></div>
                 <p className="text-sm font-medium text-accent">Ready for checkout</p>
               </div>
             ))

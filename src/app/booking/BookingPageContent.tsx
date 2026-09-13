@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
@@ -47,8 +47,9 @@ export default function BookingPageContent() {
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
   const [guestPhone, setGuestPhone] = useState("");
+  const [quantity, setQuantity] = useState(1);
 
-  const [bookingResult, setBookingResult] = useState<{ bookingId: string; id?: number; paystackReference?: string; accessCode?: string; amount: number; nights: number; roomNumber: number; category: string } | null>(null);
+  const [bookingResult, setBookingResult] = useState<{ bookingId: string; id?: number; bookingIds?: number[]; paystackReference?: string; accessCode?: string; amount: number; nights: number; roomNumber: number | string; category?: string } | null>(null);
 
   useEffect(() => {
     const cat = searchParams.get("category");
@@ -99,7 +100,7 @@ export default function BookingPageContent() {
       : 0;
 
   const selectedCatData = categories.find((c) => c.category === selectedCategory);
-  const total = selectedCatData ? selectedCatData.price * nights : 0;
+  const total = selectedCatData ? selectedCatData.price * nights * quantity : 0;
 
   const handleCreateBooking = async () => {
     if (!selectedCategory || !checkIn || !checkOut) return;
@@ -139,6 +140,7 @@ export default function BookingPageContent() {
           userId: user?.id || null,
           isGuest: !user,
           source: "online",
+          quantity,
         }),
       });
 
@@ -148,16 +150,33 @@ export default function BookingPageContent() {
         return;
       }
 
-      setBookingResult({
-        bookingId: data.booking.bookingId,
-        id: data.booking.id,
-        amount: data.amount,
-        nights: data.nights,
-        roomNumber: data.roomNumber,
-        category: data.category,
-      });
+      // API now returns an array of bookings and total amount when quantity>1
+      if (Array.isArray(data.bookings)) {
+        const first = data.bookings[0].booking;
+        // Use shared group code if provided, otherwise fall back to first booking's code
+        setBookingResult({
+          bookingId: first.groupBookingId || first.bookingId,
+          id: first.id,
+          bookingIds: data.bookings.map((b: any) => b.booking.id),
+          amount: data.amount,
+          nights: data.nights,
+          roomNumber: data.bookings.map((b: any) => b.roomNumber).join(", "),
+          category: data.bookings[0].category,
+        });
+      } else {
+        setBookingResult({
+          bookingId: data.booking.bookingId,
+          id: data.booking.id,
+          bookingIds: [data.booking.id],
+          amount: data.amount,
+          nights: data.nights,
+          roomNumber: data.roomNumber,
+          category: data.category,
+        });
+      }
       setStep(4);
-    } catch {
+    } catch (err) {
+      console.error(err);
       setError("An error occurred. Please try again.");
     } finally {
       setLoading(false);
@@ -170,10 +189,14 @@ export default function BookingPageContent() {
     setError("");
 
     try {
+      const payload: any = {};
+      // send bookingCode (shared bookingId string) so server can resolve grouped bookings
+      payload.bookingCode = bookingResult.bookingId;
+
       const res = await fetch("/api/payments/initialize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bookingId: bookingResult.id ?? bookingResult.bookingId }),
+        body: JSON.stringify(payload),
       });
 
       const data = await res.json();
@@ -183,7 +206,11 @@ export default function BookingPageContent() {
       }
 
       // store reference/access code so frontend can call verify later
+      const bookingCode = bookingResult.bookingId;
       setBookingResult((prev) => (prev ? { ...prev, paystackReference: data.reference, accessCode: data.access_code || data.accessCode } : prev));
+
+      // start polling verification in background; redirect to confirmation page when paid
+      startPollingVerification(data.reference, bookingCode);
 
       const win = window as unknown as Record<string, unknown>;
       if (typeof window !== "undefined" && win.PaystackPop) {
@@ -195,6 +222,51 @@ export default function BookingPageContent() {
       }
     } catch {
       setError("Payment initialization failed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const pollRef = useRef<number | null>(null);
+  const startPollingVerification = (reference: string, bookingCode: string) => {
+    if (!reference) return;
+    let attempts = 0;
+    const maxAttempts = 20; // ~60 seconds
+    const interval = window.setInterval(async () => {
+      attempts++;
+      try {
+        const res = await fetch(`/api/payments/verify?reference=${encodeURIComponent(reference)}`);
+        const data = await res.json();
+        if (res.ok && data.status === "success") {
+          // stop polling and navigate to confirmation page by booking code
+          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+          router.push(`/booking/confirmation?reference=${encodeURIComponent(bookingCode)}`);
+          return;
+        }
+      } catch (err) {
+        console.error("Polling verify error", err);
+      }
+      if (attempts >= maxAttempts) {
+        if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+      }
+    }, 3000);
+    pollRef.current = interval as unknown as number;
+  };
+
+  const manualCheck = async () => {
+    if (!bookingResult?.paystackReference && !bookingResult?.bookingId) return;
+    setLoading(true);
+    try {
+      const ref = bookingResult.paystackReference || bookingResult.bookingId;
+      const res = await fetch(`/api/payments/verify?reference=${encodeURIComponent(ref)}`);
+      const data = await res.json();
+      if (res.ok && data.status === "success") {
+        router.push(`/booking/confirmation?reference=${encodeURIComponent(bookingResult.bookingId)}`);
+      } else {
+        setError("Payment not yet confirmed. Try again in a few seconds.");
+      }
+    } catch (err) {
+      setError("Failed to check payment status");
     } finally {
       setLoading(false);
     }
@@ -330,6 +402,20 @@ export default function BookingPageContent() {
                   <label className="block text-sm font-medium text-charcoal mb-1.5">Phone Number</label>
                   <input type="tel" value={guestPhone} onChange={(e) => setGuestPhone(e.target.value)} placeholder="+233" className="w-full px-3 py-2.5 rounded-lg border border-cream-dark bg-cream text-charcoal text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" />
                 </div>
+                {selectedCatData && (
+                  <div>
+                    <label className="block text-sm font-medium text-charcoal mb-1.5">Number of Rooms</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={selectedCatData.availableRooms || 1}
+                      value={quantity}
+                      onChange={(e) => setQuantity(Math.max(1, Math.min(parseInt(e.target.value || "1"), selectedCatData.availableRooms || 1)))}
+                      className="w-full px-3 py-2.5 rounded-lg border border-cream-dark bg-cream text-charcoal text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+                    />
+                    <p className="text-xs text-slate mt-1">Max {selectedCatData.availableRooms} rooms available in this category for your dates.</p>
+                  </div>
+                )}
               </div>
               {selectedCatData && (
                 <div className="bg-cream rounded-lg p-4 mb-6">
@@ -340,6 +426,7 @@ export default function BookingPageContent() {
                     <div className="flex justify-between"><span className="text-slate">Check-out</span><span>{checkOut}</span></div>
                     <div className="flex justify-between"><span className="text-slate">Nights</span><span>{nights}</span></div>
                     <div className="flex justify-between"><span className="text-slate">Rate</span><span>GH₵ {selectedCatData.price}/night</span></div>
+                    <div className="flex justify-between"><span className="text-slate">Rooms</span><span>{quantity}</span></div>
                     <div className="border-t border-cream-dark pt-2 mt-2 flex justify-between font-medium">
                       <span>Total</span><span className="text-primary text-lg">GH₵ {total}</span>
                     </div>
@@ -384,6 +471,11 @@ export default function BookingPageContent() {
               <button onClick={handlePayment} disabled={loading} className="w-full py-3 bg-accent text-white rounded-lg font-medium hover:bg-accent-dark transition-colors disabled:opacity-50">
                 {loading ? "Processing..." : `Pay GH₵ ${bookingResult.amount} with Paystack`}
               </button>
+              <div className="mt-4 text-center">
+                <button onClick={manualCheck} className="text-sm text-primary hover:text-primary-dark">
+                  I&apos;ve completed payment — Check status
+                </button>
+              </div>
               <p className="text-center text-xs text-slate mt-4">Secure payment powered by Paystack.</p>
               {/* <div className="mt-6 text-center">
                 <button onClick={() => router.push(`/booking/confirmation?reference=${bookingResult?.paystackReference ?? bookingResult?.bookingId}`)} className="text-sm text-primary hover:text-primary-dark">
