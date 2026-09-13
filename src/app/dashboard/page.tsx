@@ -83,8 +83,8 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {[
           { name: "Queen Suite", data: stats.rooms.queen, price: 450 },
-          { name: "Deluxe Room", data: stats.rooms.deluxe, price: 300 },
-          { name: "Standard Room", data: stats.rooms.standard, price: 250 },
+          { name: "Deluxe Room", data: stats.rooms.deluxe, price: 350 },
+          { name: "Standard Room", data: stats.rooms.standard, price: 300 },
         ].map((cat) => (
           <div key={cat.name} className="bg-white rounded-xl border border-cream-dark p-5">
             <div className="flex items-center justify-between mb-4">

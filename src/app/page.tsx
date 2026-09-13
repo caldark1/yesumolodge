@@ -68,7 +68,7 @@ export default function HomePage() {
               },
               {
                 name: "Deluxe Room",
-                price: 300,
+                price: 350,
                 features: ["Double Bed", "Air Conditioning", "Television", "Fridge", "Free WiFi", "Hot Water"],
                 desc: "Spacious and comfortable with generous floor space and modern amenities.",
                 rooms: "12 rooms",
@@ -76,7 +76,7 @@ export default function HomePage() {
               },
               {
                 name: "Standard Room",
-                price: 250,
+                price: 300,
                 features: ["Double Bed", "Air Conditioning", "Television", "Fridge", "Free WiFi", "Hot Water"],
                 desc: "Comfortable and well-appointed with all essential amenities for a pleasant stay.",
                 rooms: "8 rooms",

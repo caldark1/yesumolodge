@@ -15,7 +15,7 @@ export const ROOM_DATA = {
   },
   deluxe: {
     category: "deluxe" as const,
-    price: 300,
+    price: 350,
     bedType: "Double Bed",
     roomNumbers: [10, 11, 18, 17, 13, 14, 22, 23, 25, 26, 29, 30],
     description:
@@ -24,7 +24,7 @@ export const ROOM_DATA = {
   },
   standard: {
     category: "standard" as const,
-    price: 250,
+    price: 300,
     bedType: "Double Bed",
     roomNumbers: [1, 2, 3, 4, 5, 6, 7, 8],
     description:
