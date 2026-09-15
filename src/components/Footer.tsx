@@ -45,8 +45,8 @@ export default function Footer() {
             <h4 className="text-white font-heading text-lg mb-4">Room Categories</h4>
             <ul className="space-y-2">
               <li className="text-sm text-white/60">Queen Suite — GH₵ 450/night</li>
-              <li className="text-sm text-white/60">Deluxe Room — GH₵ 300/night</li>
-              <li className="text-sm text-white/60">Standard Room — GH₵ 250/night</li>
+              <li className="text-sm text-white/60">Deluxe Room — GH₵ 350/night</li>
+              <li className="text-sm text-white/60">Standard Room — GH₵ 300/night</li>
             </ul>
           </div>
 
@@ -65,14 +65,30 @@ export default function Footer() {
                 <svg className="w-4 h-4 mt-0.5 text-accent shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
-                info@williamsyesumo.com
+                yesumolodge436@gmail.com
               </li>
               <li className="flex items-start gap-2 text-sm text-white/60">
-                <svg className="w-4 h-4 mt-0.5 text-accent shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.98.68l1.13 3.38a1 1 0 01-.17.91l-1.55 1.55a11.002 11.002 0 005.06 5.06l1.55-1.55a1 1 0 01.91-.17l3.38 1.13a1 1 0 01.68.98V19a2 2 0 01-2 2h-1C9.72 21 3 14.28 3 6V5z" />
-                </svg>
-                +233 20 000 0000
-              </li>
+  <svg
+    className="w-4 h-4 mt-0.5 text-accent shrink-0"
+    fill="none"
+    stroke="currentColor"
+    viewBox="0 0 24 24"
+  >
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M3 5a2 2 0 012-2h3.28a1 1 0 01.98.68l1.13 3.38a1 1 0 01-.17.91l-1.55 1.55a11.002 11.002 0 005.06 5.06l1.55-1.55a1 1 0 01.91-.17l3.38 1.13a1 1 0 01.68.98V19a2 2 0 01-2 2h-1C9.72 21 3 14.28 3 6V5z"
+    />
+  </svg>
+
+  <a
+    href="tel:+233200000000"
+    className="hover:text-accent transition-colors"
+  >
+    +233 20 000 0000
+  </a>
+</li>
             </ul>
           </div>
         </div>
@@ -81,8 +97,9 @@ export default function Footer() {
           <p className="text-xs text-white/40">
             © {new Date().getFullYear()} Williams Yesumo Lodge. All rights reserved.
           </p>
-          <p className="text-xs text-white/40">
-            Payments powered by Paystack
+          
+           <p className="text-xs text-white/40">
+            Developed by E & C DIGITAL SOLUTIONS LTD
           </p>
         </div>
       </div>

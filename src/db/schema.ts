@@ -44,6 +44,21 @@ export const rooms = pgTable("rooms", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+export const roomCategories = pgTable("room_categories", {
+  id: serial("id").primaryKey(),
+  category: roomCategoryEnum("category").notNull().unique(),
+  name: text("name").notNull(),
+  price: integer("price").notNull(),
+  description: text("description").notNull(),
+  policy: text("policy").notNull(),
+  amenities: text("amenities").array().notNull(),
+  images: text("images").array().default([]).notNull(),
+  badge: text("badge").notNull(),
+  accent: text("accent").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const bookings = pgTable("bookings", {
   id: serial("id").primaryKey(),
   bookingId: text("booking_id").notNull().unique(),
