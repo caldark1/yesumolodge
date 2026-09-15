@@ -83,10 +83,10 @@ export default function Footer() {
   </svg>
 
   <a
-    href="tel:+233200000000"
+    href="tel:+233597857854"
     className="hover:text-accent transition-colors"
   >
-    +233 20 000 0000
+    +233 59 785 7854
   </a>
 </li>
             </ul>
